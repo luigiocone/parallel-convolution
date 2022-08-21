@@ -10,6 +10,8 @@
 #include "mpi.h"
 
 #define DEFAULT_ITERATIONS 1
+#define GRID_FILE_PATH "./io-files/grid.txt"
+#define KERNEL_FILE_PATH "./io-files/kernel.txt"
 
 // documentation: http://mpitutorial.com/tutorials/mpi-send-and-receive/
 // http://mpitutorial.com/tutorials/dynamic-receiving-with-mpi-probe-and-mpi-status/
@@ -76,33 +78,38 @@ int main ( int argc, char** argv ) {
   int KERNEL_DIM;
   int KERNEL_SIZE;
 
-  num_iterations = DEFAULT_ITERATIONS;
-  if (argc >= 3) {
-    DIM = atoi(argv[1]);
-    GRID_WIDTH = DIM * DIM;
-    KERNEL_DIM = atoi(argv[2]);
-    KERNEL_SIZE = KERNEL_DIM * KERNEL_DIM;
-    if (argc == 4) {
-      num_iterations = atoi(argv[3]);
-    }
-  } else {
-    printf("Invalid command line arguments");
-    MPI_Finalize();
-    exit(-1);
-  }
+  /* Reading data from file */
+  FILE *fp_grid;
+  FILE *fp_kernel;
+	
+	if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
+		printf("fopen grid file error");
+		exit(-1);
+	}
+  if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
+		printf("fopen kernel file error");
+		exit(-1);
+	}
+
+  /* First token represent matrix dimension */
+  fscanf(fp_grid, "%d", &DIM);
+  fscanf(fp_kernel, "%d", &KERNEL_DIM);
+
+	GRID_WIDTH = DIM*DIM;
+  KERNEL_SIZE = KERNEL_DIM * KERNEL_DIM;
+  num_iterations = (argc == 2) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
+  
+  /* Reading operations */
   int main_grid[GRID_WIDTH];
-  memset(main_grid, 0, GRID_WIDTH*sizeof(int));
-  for(int i = 0; i < GRID_WIDTH; i++) {
-    main_grid[i] = 1;
-  }
+  for(int i = 0; fscanf(fp_grid, "%d", &main_grid[i]) != EOF; i++);
+  fclose(fp_grid);
+
+  int kernel[KERNEL_SIZE];
+  for(int i = 0; fscanf(fp_kernel, "%d", &kernel[i]) != EOF; i++);
+  fclose(fp_kernel);
 
   int num_pads = (KERNEL_DIM - 1) / 2;
 
-  int kernel[KERNEL_SIZE];
-  memset(kernel, 0, KERNEL_SIZE*sizeof(int));
-  for(int i = 0; i < KERNEL_SIZE; i++) {
-    kernel[i] = 1;
-  }
   // Messaging variables
   MPI_Status status;
 
@@ -188,16 +195,16 @@ int main ( int argc, char** argv ) {
     }
 
     // Output the updated grid state
-     // if ( ID == 0 ) { 
-     //    printf ( "\nConvolution Output: \n"); 
-     //    for ( j = 0; j < GRID_WIDTH; j++ ) { 
-     //      if ( j % DIM == 0 ) { 
-     //        printf( "\n" ); 
-     //      } 
-     //      printf ( "%d  ", main_grid[j] ); 
-     //   } 
-     //    printf( "\n" ); 
-     // }
+    /*if (ID == 0) { 
+      printf("\nConvolution Output: \n"); 
+      for (j = 0; j < GRID_WIDTH; j++) { 
+        if (j % DIM == 0) { 
+          printf( "\n" ); 
+        } 
+        printf("%d ", main_grid[j]); 
+      } 
+      printf("\n"); 
+    }*/
   }
 
   if(num_procs >= 2) {

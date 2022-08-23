@@ -13,6 +13,7 @@
 #define DEFAULT_ITERATIONS 1
 #define GRID_FILE_PATH "./io-files/grid.txt"
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
+#define RESULT_FILE_PATH "./io-files/result.txt"
 
 // documentation: http://mpitutorial.com/tutorials/mpi-send-and-receive/
 // http://mpitutorial.com/tutorials/dynamic-receiving-with-mpi-probe-and-mpi-status/
@@ -203,18 +204,27 @@ int main ( int argc, char** argv ) {
       }
       
     }
+  }
+    
+  // Output the updated grid state
+  if (!rank) {
+    FILE *fp_result;
+	  if((fp_result = fopen(RESULT_FILE_PATH, "w")) == NULL) {
+      printf("fopen result file error\n");
+      exit(-1);
+    }
 
-    // Output the updated grid state
-    /*if (rank == 0) { 
-      printf("\nConvolution Output: \n"); 
-      for (int j = 0; j < GRID_WIDTH; j++) { 
-        if (j % DIM == 0) { 
-          printf( "\n" ); 
-        } 
-        printf("%d ", main_grid[j]); 
-      } 
-      printf("\n"); 
-    }*/
+    int row = 0; int col = 0;
+    while(row + col < GRID_WIDTH) {
+      fprintf(fp_result, "%d ", main_grid[row+col]);
+      if (col != DIM-1) 
+        col++;
+      else {
+        row += DIM;
+        col = 0;
+        fprintf(fp_result, "\n");
+      }
+    }
   }
 
   if(num_procs >= 2) {

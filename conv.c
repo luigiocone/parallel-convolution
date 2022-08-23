@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <string.h>
 #include <sys/time.h>
+#include "papi.h"
 #include "mpi.h"
 
 #define DEFAULT_ITERATIONS 1
@@ -68,15 +69,24 @@ int * check(int * sub_grid, int nrows, int DIM, int * kernel, int kernel_dim) {
 }
 
 int main ( int argc, char** argv ) {
-  // MPI Standard variable
-  int num_procs;
-  int ID, j;
+  int num_procs;     /* Number of MPI processes in the communicator */
+  int rank;          /* Current process identifier */ 
   int iters = 0;
   int num_iterations;
   int DIM;
   int GRID_WIDTH;
   int KERNEL_DIM;
   int KERNEL_SIZE;
+  long_long time_start, time_stop;
+  struct timeval t1, t2;
+  double time; 
+  
+  if (PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT) {
+    printf("Init PAPI error\n");
+    exit(-1);
+  }
+
+  time_start = PAPI_get_real_usec();
 
   /* Reading data from file */
   FILE *fp_grid;
@@ -114,15 +124,15 @@ int main ( int argc, char** argv ) {
   MPI_Status status;
 
   // MPI Setup
-  if ( MPI_Init( &argc, &argv ) != MPI_SUCCESS )
-  {
+  if(MPI_Init(&argc, &argv) != MPI_SUCCESS) {
     printf ( "MPI_Init error\n" );
+    exit(-1);
   }
 
-  MPI_Comm_size ( MPI_COMM_WORLD, &num_procs ); // Set the num_procs
-  MPI_Comm_rank ( MPI_COMM_WORLD, &ID );
+  MPI_Comm_size(MPI_COMM_WORLD, &num_procs); // Set the num_procs
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  assert ( DIM % num_procs == 0 );
+  assert(DIM % num_procs == 0);
 
   int upper[DIM * num_pads];
   int lower[DIM * num_pads];
@@ -130,11 +140,11 @@ int main ( int argc, char** argv ) {
   int * pad_row_upper;
   int * pad_row_lower;
   
-  int start = (DIM / num_procs) * ID;
+  int start = (DIM / num_procs) * rank;
   int end = (DIM / num_procs) - 1 + start;
   int nrows = end + 1 - start;
-  int next = (ID + 1) % num_procs;
-  int prev = ID != 0 ? ID - 1 : num_procs - 1;
+  int next = (rank + 1) % num_procs;
+  int prev = (rank != 0) ? rank - 1 : num_procs - 1;
   
   for ( iters = 0; iters < num_iterations; iters++ ) {
 
@@ -145,14 +155,14 @@ int main ( int argc, char** argv ) {
     pad_row_upper = malloc(sizeof(int) * DIM * num_pads);
 
     if(num_procs > 1) {
-      if(ID % 2 == 1) {
+      if(rank % 2 == 1) {
         MPI_Recv(pad_row_lower, DIM * num_pads, MPI_INT, next, 1, MPI_COMM_WORLD, &status);
         MPI_Recv(pad_row_upper, DIM * num_pads, MPI_INT, prev, 1, MPI_COMM_WORLD, &status);
       } else {
         MPI_Send(upper, DIM * num_pads, MPI_INT, prev, 1, MPI_COMM_WORLD);
         MPI_Send(lower, DIM * num_pads, MPI_INT, next, 1, MPI_COMM_WORLD);
       }  
-      if(ID % 2 == 1) {
+      if(rank % 2 == 1) {
         MPI_Send(upper, DIM * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD);
         MPI_Send(lower, DIM * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD);
       } else {
@@ -165,10 +175,10 @@ int main ( int argc, char** argv ) {
     }
 
     int sub_grid[DIM * (nrows + (2 * num_pads))];
-    if (ID == 0) {
+    if (rank == 0) {
       memset(pad_row_upper, 0, DIM*sizeof(int)*num_pads);
     }
-    if (ID == (num_procs - 1)) {
+    if (rank == (num_procs - 1)) {
       memset(pad_row_lower, 0, DIM*sizeof(int)*num_pads);
     }
     memcpy(sub_grid, pad_row_upper, sizeof(int) * DIM * num_pads); 
@@ -176,7 +186,7 @@ int main ( int argc, char** argv ) {
     memcpy(&sub_grid[DIM * (nrows + num_pads)], pad_row_lower, sizeof(int) * DIM * num_pads);
     int * changed_subgrid = check(sub_grid, nrows, DIM, kernel, KERNEL_DIM);
 
-    if(ID != 0) {
+    if(rank != 0) {
       MPI_Send(changed_subgrid, nrows * DIM, MPI_INT, 0, 11, MPI_COMM_WORLD);
       MPI_Recv(&main_grid[0], DIM * DIM, MPI_INT, 0, 10, MPI_COMM_WORLD, &status);
     } else {
@@ -195,9 +205,9 @@ int main ( int argc, char** argv ) {
     }
 
     // Output the updated grid state
-    /*if (ID == 0) { 
+    /*if (rank == 0) { 
       printf("\nConvolution Output: \n"); 
-      for (j = 0; j < GRID_WIDTH; j++) { 
+      for (int j = 0; j < GRID_WIDTH; j++) { 
         if (j % DIM == 0) { 
           printf( "\n" ); 
         } 
@@ -210,6 +220,12 @@ int main ( int argc, char** argv ) {
   if(num_procs >= 2) {
     free(pad_row_upper);
     free(pad_row_lower);
+  }
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  if(!rank) {
+    time_stop = PAPI_get_real_usec();
+    printf("(PAPI) Elapsed time: %lld us\n", (time_stop - time_start));
   }
 
   MPI_Finalize(); // finalize so I can exit

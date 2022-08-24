@@ -21,8 +21,8 @@ def img_to_matrix(img):
 
 def main():
     # To store a custom image from scikit-image dataset
-    src_img = data.camera()  # This should be 512x512
-    img_to_matrix(src_img)   # From img to matrix file
+    # src_img = data.camera()  # This should be 512x512
+    # img_to_matrix(src_img)   # From img to matrix file
     #return;
     
     # From matrix file to img

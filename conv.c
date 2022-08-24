@@ -24,9 +24,11 @@ uint8_t middle_krow_index;    /* Index of the middle row of the kernel matrix */
 int8_t *kernel;               /* Kernel buffer */
 int *grid;                    /* Grid buffer */                        
 
-int conv_column(int *, int);
-int conv(int *, int);
-int *check(int *);
+int conv_column(int*, int);
+int conv(int*, int);
+int *check(int*);
+void read_data(int*);
+void handle_PAPI_error(int, char*);
 
 int conv_column(int *sub_grid, int i) {
   int counter = 0;
@@ -77,13 +79,14 @@ int main(int argc, char** argv) {
   MPI_Status status;
   int rank;                          /* Current process identifier */
   int num_procs;                     /* Number of MPI processes in the communicator */
-  FILE *fp_grid, *fp_kernel;         /* Input files containing grid and kernel matrix */
-  FILE *fp_result;                   /* Output file */
   uint8_t num_iterations;            /* How many times do the convolution operation */
-  uint8_t len_kernel;                /* Length of whole input kernel matrix */
   int len_grid;                      /* Length of whole input grid matrix */
   long_long time_start, time_stop;   /* To measure execution time */
+  long_long num_cache_miss;          /* To measure number of cache miss */
+	int event_set = PAPI_NULL;         /* Group of hardware events for PAPI library */
+  int papi_rc;                       /* PAPI return code, used in error handling */
 
+  num_iterations = (argc == 2) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   /* MPI Setup */
   if(MPI_Init(&argc, &argv) != MPI_SUCCESS) {
     printf("MPI_Init error\n");
@@ -93,44 +96,19 @@ int main(int argc, char** argv) {
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   assert(len_row % num_procs == 0);
-  
-  if(PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT) {
-    printf("Init PAPI error\n");
-    exit(-1);
-  }
+
+  /* PAPI setup */
+  if(papi_rc = PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT)
+    handle_PAPI_error(papi_rc, "Error in library init.");
+  if(papi_rc = PAPI_create_eventset(&event_set) != PAPI_OK)
+    handle_PAPI_error(papi_rc, "Error while creating the PAPI eventset.");
+	if(papi_rc = PAPI_add_event(event_set, PAPI_L2_TCM) != PAPI_OK)
+    handle_PAPI_error(papi_rc, "Errore while adding L2 total cache miss event.");
   
   if(!rank) time_start = PAPI_get_real_usec();
+  read_data(&len_grid);
 
-  /* Opening input files */
-  if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
-    printf("fopen grid file error");
-    exit(-1);
-  }
-  if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
-    printf("fopen kernel file error");
-    exit(-1);
-  }
-
-  /* First token represent matrix dimension */
-  fscanf(fp_grid, "%hd", &len_row);
-  fscanf(fp_kernel, "%hhd", &len_krow);
-
-  len_grid = len_row*len_row;
-  len_kernel = len_krow*len_krow;
-  middle_krow_index = (len_kernel - 1) >> 1;
-  num_iterations = (argc == 2) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
-  num_pads = (len_krow - 1) >> 1;
-
-  /* Reading data from files */
-  grid = malloc(len_grid*sizeof(int));
-  for(int i = 0; fscanf(fp_grid, "%d", &grid[i]) != EOF; i++);
-  fclose(fp_grid);
-
-  kernel = malloc(len_kernel);
-  for(int i = 0; fscanf(fp_kernel, "%hhd", &kernel[i]) != EOF; i++);
-  fclose(fp_kernel);
-
-  /* Data splitting */  
+  /* Data splitting */
   int start = (len_row / num_procs) * rank;
   int end = (len_row / num_procs) - 1 + start;
   num_rows = end + 1 - start;
@@ -142,6 +120,9 @@ int main(int argc, char** argv) {
   int *pad_row_upper;            /* Rows holded by other process and needed for this one */
   int *pad_row_lower;
   
+  if (papi_rc = PAPI_start(event_set) != PAPI_OK) 
+    handle_PAPI_error(papi_rc, "Error in PAPI_start().");
+
   for(uint8_t iters = 0; iters < num_iterations; iters++) {
 
     memcpy(lower, &grid[len_row * (end - num_pads + 1)], sizeof(int) * len_row * num_pads);
@@ -207,6 +188,13 @@ int main(int argc, char** argv) {
       
     }
   }
+
+  /* Stop the count! */ 
+	if (papi_rc = PAPI_stop(event_set, &num_cache_miss) != PAPI_OK){
+    handle_PAPI_error(papi_rc, "Error in PAPI_stop().");
+	}
+
+  printf("Rank: %d, total cache misses:%lld\n", rank, num_cache_miss);
   
   /* Store computed matrix */
   if (!rank) {
@@ -241,4 +229,46 @@ int main(int argc, char** argv) {
   }
 
   MPI_Finalize();
+}
+
+void read_data(int *len_grid) {
+  FILE *fp_grid, *fp_kernel;         /* Input files containing grid and kernel matrix */
+  FILE *fp_result;                   /* Output file */
+  uint8_t len_kernel;                /* Length of whole input kernel matrix */
+
+  /* Opening input files */
+  if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
+    printf("fopen grid file error");
+    exit(-1);
+  }
+  if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
+    printf("fopen kernel file error");
+    exit(-1);
+  }
+
+  /* First token represent matrix dimension */
+  fscanf(fp_grid, "%hd", &len_row);
+  fscanf(fp_kernel, "%hhd", &len_krow);
+
+  *len_grid = len_row*len_row;
+  len_kernel = len_krow*len_krow;
+  middle_krow_index = (len_kernel - 1) >> 1;
+  num_pads = (len_krow - 1) >> 1;
+
+  /* Reading data from files */
+  grid = malloc(*len_grid*sizeof(int));
+  for(int i = 0; fscanf(fp_grid, "%d", &grid[i]) != EOF; i++);
+  fclose(fp_grid);
+
+  kernel = malloc(len_kernel);
+  for(int i = 0; fscanf(fp_kernel, "%hhd", &kernel[i]) != EOF; i++);
+  fclose(fp_kernel);
+}
+
+void handle_PAPI_error(int rc, char *msg) {
+  char error_str[PAPI_MAX_STR_LEN];
+
+  PAPI_perror(error_str); PAPI_strerror(rc);
+  printf("%s\nReturn code: %d - %s \n", msg, rc, error_str);
+  exit(-1);
 }

@@ -16,54 +16,56 @@
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 
-uint8_t num_rows;        /* Number of rows assigned to one process */
-uint8_t num_pads;        /* Number of rows that should be shared with other processes */
-uint8_t len_krow;        /* Length of one row of the input kernel */
-uint16_t len_row;        /* Length of one row of the input grid */
-int8_t *kernel;          /* Kernel buffer */
-int *grid;               /* Grid buffer */                        
+uint8_t num_rows;             /* Number of rows assigned to one process */
+uint8_t num_pads;             /* Number of rows that should be shared with other processes */
+uint8_t len_krow;             /* Length of one row of the kernel matrix */
+uint16_t len_row;             /* Length of one row of the grid matrix */
+uint8_t middle_krow_index;    /* Index of the middle row of the kernel matrix */
+int8_t *kernel;               /* Kernel buffer */
+int *grid;                    /* Grid buffer */                        
 
 int conv_column(int *, int);
 int conv(int *, int);
 int *check(int *);
 
-int conv_column(int * sub_grid, int i) {
+int conv_column(int *sub_grid, int i) {
   int counter = 0;
   
-  for (int j = 1; j < (num_pads + 1); j++) {
-    counter = counter + sub_grid[i + j*len_row] * kernel[(((len_krow - 1)*(len_krow + 1)) / 2) + j*len_krow];
-    counter = counter + sub_grid[i - j*len_row] * kernel[(((len_krow - 1)*(len_krow + 1)) / 2) - j*len_krow];
+  for (int j = 1; j <= num_pads; j++) {
+    counter += sub_grid[i + j*len_row] * kernel[middle_krow_index + j*len_krow];
+    counter += sub_grid[i - j*len_row] * kernel[middle_krow_index - j*len_krow];
   }
-  counter = counter + sub_grid[i] * kernel[(((len_krow - 1)*(len_krow + 1)) / 2)];
+  counter += sub_grid[i] * kernel[middle_krow_index];
   
   return counter;
 }
 
-int conv(int * sub_grid, int i) {
+int conv(int *sub_grid, int i) {
   int counter = 0;
   //convolve middle column
-  counter = counter + conv_column(sub_grid, i);
+  counter += conv_column(sub_grid, i);
+
+  //get first and last element of current row of global grid
+  int first = (i / len_row) * len_row;
+  int end = first + len_row - 1;
 
   //convolve left and right columns
-  for (int j = 1; j < (num_pads + 1); j++) {
-    //get last element of current row
-    int end = (((i / len_row) + 1) * len_row) - 1;
-    if (i + j - end <= 0) { //if column is valid
-      counter = counter + conv_column(sub_grid, i + j);
+  for (int j = 1; j <= num_pads; j++) {
+    /* checking if column indexes don't exceed global grid */
+    if (i + j - end <= 0) {
+      counter += conv_column(sub_grid, i + j);
     }
-    //get first element of current row
-    int first = (i / len_row) * len_row;
     if (i - j - first >= 0) {
-      counter = counter + conv_column(sub_grid, i - j);
+      counter += conv_column(sub_grid, i - j);
     }
   }
   
   return counter;
 }
 
-int *check(int * sub_grid) {
+int *check(int *sub_grid) {
   int val;
-  int * new_grid = calloc(len_row * num_rows, sizeof(int));
+  int *new_grid = calloc(len_row * num_rows, sizeof(int));
   for(int i = (num_pads * len_row); i < (len_row * (num_pads + num_rows)); i++) {
     val = conv(sub_grid, i);
     new_grid[i - (num_pads * len_row)] = val;
@@ -78,7 +80,8 @@ int main(int argc, char** argv) {
   FILE *fp_grid, *fp_kernel;         /* Input files containing grid and kernel matrix */
   FILE *fp_result;                   /* Output file */
   uint8_t num_iterations;            /* How many times do the convolution operation */
-  int len_grid;                      /* Length of whole input grid */
+  uint8_t len_kernel;                /* Length of whole input kernel matrix */
+  int len_grid;                      /* Length of whole input grid matrix */
   long_long time_start, time_stop;   /* To measure execution time */
 
   /* MPI Setup */
@@ -113,6 +116,8 @@ int main(int argc, char** argv) {
   fscanf(fp_kernel, "%hhd", &len_krow);
 
   len_grid = len_row*len_row;
+  len_kernel = len_krow*len_krow;
+  middle_krow_index = (len_kernel - 1) >> 1;
   num_iterations = (argc == 2) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   num_pads = (len_krow - 1) >> 1;
 
@@ -121,7 +126,7 @@ int main(int argc, char** argv) {
   for(int i = 0; fscanf(fp_grid, "%d", &grid[i]) != EOF; i++);
   fclose(fp_grid);
 
-  kernel = malloc(len_krow*len_krow);
+  kernel = malloc(len_kernel);
   for(int i = 0; fscanf(fp_kernel, "%hhd", &kernel[i]) != EOF; i++);
   fclose(fp_kernel);
 

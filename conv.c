@@ -16,12 +16,12 @@
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 
-uint8_t num_pads;        /* Rows holded by other processes */
+uint8_t num_rows;        /* Number of rows assigned to one process */
+uint8_t num_pads;        /* Number of rows that should be shared with other processes */
 uint8_t len_krow;        /* Length of one row of the input kernel */
 uint16_t len_row;        /* Length of one row of the input grid */
-uint8_t num_rows;        /* Number of rows assigned to one process */
-int *grid;               /* Grid buffer */                        
 int8_t *kernel;          /* Kernel buffer */
+int *grid;               /* Grid buffer */                        
 
 int conv_column(int *, int);
 int conv(int *, int);
@@ -100,13 +100,13 @@ int main(int argc, char** argv) {
 
   /* Opening input files */
   if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
-		printf("fopen grid file error");
-		exit(-1);
-	}
+    printf("fopen grid file error");
+    exit(-1);
+  }
   if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
-		printf("fopen kernel file error");
-		exit(-1);
-	}
+    printf("fopen kernel file error");
+    exit(-1);
+  }
 
   /* First token represent matrix dimension */
   fscanf(fp_grid, "%hd", &len_row);
@@ -129,8 +129,8 @@ int main(int argc, char** argv) {
   int start = (len_row / num_procs) * rank;
   int end = (len_row / num_procs) - 1 + start;
   num_rows = end + 1 - start;
-  uint8_t next = (rank + 1) % num_procs;
-  uint8_t prev = (rank != 0) ? rank - 1 : num_procs - 1;
+  uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
+  uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
 
   int upper[len_row*num_pads];   /* Rows holded by this process and needed by another one */
   int lower[len_row*num_pads];
@@ -146,20 +146,27 @@ int main(int argc, char** argv) {
     pad_row_upper = malloc(sizeof(int) * len_row * num_pads);
 
     if(num_procs > 1) {
-      if(rank % 2 == 1) {
-        MPI_Recv(pad_row_lower, len_row * num_pads, MPI_INT, next, 1, MPI_COMM_WORLD, &status);
-        MPI_Recv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 1, MPI_COMM_WORLD, &status);
-      } else {
-        MPI_Send(upper, len_row * num_pads, MPI_INT, prev, 1, MPI_COMM_WORLD);
-        MPI_Send(lower, len_row * num_pads, MPI_INT, next, 1, MPI_COMM_WORLD);
-      }  
-      if(rank % 2 == 1) {
+      if (!rank) {
+        /* Process with rank 0 doesn't have a "prev" process */
+        MPI_Recv(pad_row_lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &status);
+        MPI_Send(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD);
+      } else if (rank == num_procs-1) {
+        /* Last process doesn't have a "next" process */
+        MPI_Send(upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD);
+        MPI_Recv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, &status);
+      } else if(!(rank & 1)) {
+        /* Even processes (except first) */
+        MPI_Recv(pad_row_lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &status);
+        MPI_Recv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, &status);
         MPI_Send(upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD);
         MPI_Send(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD);
       } else {
+        /* Odd processes (except last) */
+        MPI_Send(upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD);
+        MPI_Send(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD);
         MPI_Recv(pad_row_lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &status);
         MPI_Recv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, &status);
-      }
+      }  
     } else {
       pad_row_lower = upper;
       pad_row_upper = lower;

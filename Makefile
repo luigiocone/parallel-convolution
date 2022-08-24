@@ -1,6 +1,7 @@
 CC=mpicc
 RUN=mpirun
 WORKSPACE=/home/ocone/convolution
+#${REMOTE_USERNAME} is an environment variable
 
 all: compile
 

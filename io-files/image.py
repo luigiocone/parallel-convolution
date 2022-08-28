@@ -27,7 +27,7 @@ def main():
     
     # From matrix file to img
     src_img = np.genfromtxt(GRID_FILE_NAME,   delimiter=' ', dtype=int, skip_header=1)
-    res_img = np.genfromtxt(RESULT_FILE_NAME, delimiter=' ', dtype=int)
+    res_img = np.genfromtxt(RESULT_FILE_NAME, delimiter=' ', dtype=int,skip_header=2, skip_footer=2, usecols=range(2,510))
 
     #subplot(r,c) provide the no. of rows and columns
     f, axarr = plt.subplots(1,2) 

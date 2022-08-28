@@ -22,3 +22,18 @@ Each node is built with 2 Xeon processors (_Intel Xeon E5-2650V2_) meaning 16 ph
 | L3 Cache | 20 MB shared cache |
 
 Also, nodes are interconnected with a low-latency network (InfiniBand) at 56 Gb/sec bandwidth and a Fast Ethernet at 100 Mb/s. The OS is _Rocks 7.0 - Manzanita_.
+
+## How to run
+Dependencies: 
+- `MPI` (e.g. MPICH) 
+- `PAPI` 
+
+Once installed, digit: 
+```
+make && ./run.sh
+```
+If source matrix is an image, source and result images could be plot with python:
+```
+cd io-files
+python image.py
+```

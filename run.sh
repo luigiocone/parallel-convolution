@@ -10,37 +10,37 @@ WORKSPACE="/home/ocone/convolution"
 
 case $1 in
   hpc)       # Cluster only
-	mpirun --mca btl self,openib -np 64 -machinefile mf ./conv 2
+  mpirun --mca btl self,openib -np 64 -machinefile mf ./conv 2
     ;;
 
   connect)   # Connect to cluster
-	ssh -p 22001 $REMOTE_USERNAME
+  ssh -p 22001 $REMOTE_USERNAME
     ;;
 
   clean)
-    rm -f conv conv.clog2 conv.slog2
-	pkill -u ocone
+  rm -f conv conv.clog2 conv.slog2
+  pkill -u ocone
     ;;
 
   send)      # Transfer source code, makefile, and run.sh to cluster
-    scp -P 22001 conv.c Makefile $REMOTE_USERNAME:$WORKSPACE
+  scp -P 22001 conv.c Makefile $REMOTE_USERNAME:$WORKSPACE
     ;;
 
   receive)   # Transfer .clog2 file from cluster to local machine
-	scp -P 22001 ${REMOTE_USERNAME}:$WORKSPACE/conv.clog2 ./
+  scp -P 22001 ${REMOTE_USERNAME}:$WORKSPACE/conv.clog2 ./
     ;;
   
   createlog) # Create a .clog2 file. Java commands must be executed on local machine 
-	mpecc -mpilog -lpthread -o conv conv.c
-	mpirun --mca btl self,openib -np 2 -machinefile mf ./conv 2
+  mpecc -mpilog -lpthread -o conv conv.c
+  mpirun --mca btl self,openib -np 2 -machinefile mf ./conv 2
     ;;
 
   convert)   # Convert .clog2 to .slog2 file
-	java -jar clog2TOslog2.jar conv.clog2
+  java -jar clog2TOslog2.jar conv.clog2
     ;;
 
   showlog)
-	java -jar jumpshot.jar conv.slog2
+  java -jar jumpshot.jar conv.slog2
     ;;
 
   *)

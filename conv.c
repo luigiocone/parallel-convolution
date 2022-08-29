@@ -26,7 +26,7 @@ int8_t *kernel;               /* Kernel buffer */
 int *grid;                    /* Grid buffer */
 
 int conv_element(int*, int);
-int *conv_subgrid(int*, int, int);
+int *conv_subgrid(int*, int*, int, int);
 void read_data(int*);
 void store_data(int);
 void handle_PAPI_error(int, char*);
@@ -75,9 +75,8 @@ int conv_element(int *sub_grid, int i) {
   return counter;
 }
 
-int *conv_subgrid(int *sub_grid, int start_index, int end_index) {
+int *conv_subgrid(int *sub_grid, int *new_grid, int start_index, int end_index) {
   int val;
-  int *new_grid = calloc(len_row * num_rows, sizeof(int));
   for(int i = start_index; i < end_index; i++) {
     val = conv_element(sub_grid, i);
     new_grid[i-len_row*num_pads] = val;
@@ -87,6 +86,8 @@ int *conv_subgrid(int *sub_grid, int start_index, int end_index) {
 
 int main(int argc, char** argv) {
   MPI_Status status;
+  MPI_Status stat[4];
+  MPI_Request req[4];
   int rank;                          /* Current process identifier */
   int num_procs;                     /* Number of MPI processes in the communicator */
   uint8_t num_iterations;            /* How many times do the convolution operation */
@@ -128,62 +129,69 @@ int main(int argc, char** argv) {
   uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
   uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
 
-  int upper[len_row*num_pads];   /* Rows holded by this process and needed by another one */
-  int lower[len_row*num_pads];
-  int *pad_row_upper;            /* Rows holded by other process and needed for this one */
+  /* Rows holded by this process and needed by another one */
+  int *upper = &grid[len_row * start];
+  int *lower = &grid[len_row * (end - num_pads + 1)];
+  /* Rows holded by other process and needed for this one */
+  int *pad_row_upper;
   int *pad_row_lower;
   
   if (papi_rc = PAPI_start(event_set) != PAPI_OK) 
     handle_PAPI_error(papi_rc, "Error in PAPI_start().");
 
   for(uint8_t iters = 0; iters < num_iterations; iters++) {
+    int sub_grid[len_row * (num_rows + (2 * num_pads))];
+    pad_row_upper = sub_grid;
+    pad_row_lower = &sub_grid[len_row * (num_rows + num_pads)];
+    memcpy(&sub_grid[len_row * num_pads], &grid[len_row * start], sizeof(int) * len_row * num_rows);
 
-    memcpy(lower, &grid[len_row * (end - num_pads + 1)], sizeof(int) * len_row * num_pads);
-    pad_row_lower = malloc(sizeof(int) * len_row * num_pads);
-    
-    memcpy(upper, &grid[len_row * start], sizeof(int) * len_row * num_pads);
-    pad_row_upper = malloc(sizeof(int) * len_row * num_pads);
+    /* Start convolution only of central grid elements */
+    int *changed_subgrid = malloc(len_row * num_rows * sizeof(int));
+    conv_subgrid(sub_grid, changed_subgrid, len_row*(num_pads << 1), (len_row * (num_rows-num_pads)));
 
     if(num_procs > 1) {
       if (!rank) {
         /* Process with rank 0 doesn't have a "prev" process */
-        MPI_Recv(pad_row_lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &status);
-        MPI_Send(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD);
+        MPI_Isend(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &req[1]);
+        MPI_Irecv(pad_row_lower, len_row * num_pads, MPI_INT, next, 1, MPI_COMM_WORLD, req);
       } else if (rank == num_procs-1) {
         /* Last process doesn't have a "next" process */
-        MPI_Send(upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD);
-        MPI_Recv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, &status);
-      } else if(!(rank & 1)) {
-        /* Even processes (except first) */
-        MPI_Recv(pad_row_lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &status);
-        MPI_Recv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, &status);
-        MPI_Send(upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD);
-        MPI_Send(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD);
+        MPI_Isend(upper, len_row * num_pads, MPI_INT, prev, 1, MPI_COMM_WORLD, &req[1]);
+        MPI_Irecv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, req);
       } else {
-        /* Odd processes (except last) */
-        MPI_Send(upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD);
-        MPI_Send(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD);
-        MPI_Recv(pad_row_lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &status);
-        MPI_Recv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, &status);
+        /* Every other process */
+        MPI_Isend(upper, len_row * num_pads, MPI_INT, prev, 1, MPI_COMM_WORLD, &req[2]);
+        MPI_Irecv(pad_row_upper, len_row * num_pads, MPI_INT, prev, 0, MPI_COMM_WORLD, req);
+        MPI_Isend(lower, len_row * num_pads, MPI_INT, next, 0, MPI_COMM_WORLD, &req[3]);
+        MPI_Irecv(pad_row_lower, len_row * num_pads, MPI_INT, next, 1, MPI_COMM_WORLD, &req[1]);
       }  
-    } else {
-      pad_row_lower = upper;
-      pad_row_upper = lower;
-    }
+    } 
 
-    int sub_grid[len_row * (num_rows + (2 * num_pads))];
     if (rank == 0) {
       memset(pad_row_upper, 0, len_row*sizeof(int)*num_pads);
     }
     if (rank == (num_procs - 1)) {
       memset(pad_row_lower, 0, len_row*sizeof(int)*num_pads);
     }
-    memcpy(sub_grid, pad_row_upper, sizeof(int) * len_row * num_pads);
-    memcpy(&sub_grid[len_row * num_pads], &grid[len_row * start], sizeof(int) * len_row * num_rows);
-    memcpy(&sub_grid[len_row * (num_rows + num_pads)], pad_row_lower, sizeof(int) * len_row * num_pads);
 
-    /* Start convolution */
-    int *changed_subgrid = conv_subgrid(sub_grid, len_row*num_pads, (len_row * (num_rows+num_pads)));
+    /* Pad convolution */
+    if(num_procs > 1) {
+      int completed[2];
+      MPI_Test(req, completed, stat);
+      if(!rank || rank == num_procs-1) {
+        if(!completed[0]) {
+          MPI_Wait(req, stat);
+        }
+      }
+      else {
+        MPI_Test(&req[1], &completed[1], &stat[1]);
+        if (!completed[0] || !completed[1]) {
+          MPI_Waitall(2, req, stat);
+        }
+      }
+    }
+    conv_subgrid(sub_grid, changed_subgrid, len_row*num_pads, (len_row * (num_pads << 1)));
+    conv_subgrid(sub_grid, changed_subgrid, (len_row * (num_rows-num_pads)), (len_row * (num_rows+num_pads)));
 
     if(rank != 0) {
       MPI_Send(changed_subgrid, num_rows * len_row, MPI_INT, 0, 11, MPI_COMM_WORLD);
@@ -211,11 +219,6 @@ int main(int argc, char** argv) {
   
   /* Store computed matrix */
   if (!rank) store_data(len_grid);
-
-  if(num_procs >= 2) {
-    free(pad_row_upper);
-    free(pad_row_lower);
-  }
 
   MPI_Barrier(MPI_COMM_WORLD);
   if(!rank) {

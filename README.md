@@ -37,3 +37,5 @@ If source matrix is an image, source and result images could be plot with python
 cd io-files
 python image.py
 ```
+The following image is an output example. Left image is the source matrix, the right image has been computed using a _ridge detection kernel_ after one convolution iteration.
+![Ridge detection](https://github.com/luigiocone/Parallel-Convolution-MPI/blob/master/docs/img/ridge_detection_camera.png?raw=true)

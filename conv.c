@@ -25,13 +25,13 @@ uint8_t middle_krow_index;    /* Index of the middle row of the kernel matrix */
 int8_t *kernel;               /* Kernel buffer */
 int *grid;                    /* Grid buffer */
 
-int conv_element(int*, int, int , int *, int *);
-int *conv_subgrid(int*, int , int *, int *);
+int conv_element(int*, int);
+int *conv_subgrid(int*, int, int);
 void read_data(int*);
 void store_data(int);
 void handle_PAPI_error(int, char*);
 
-int conv_element(int *sub_grid, int i, int rank, int *pad_row_upper, int *pad_row_lower) {
+int conv_element(int *sub_grid, int i) {
   int counter = 0;
   int curr_col = i % len_row;
   //int curr_row = i / len_row;
@@ -46,7 +46,7 @@ int conv_element(int *sub_grid, int i, int rank, int *pad_row_upper, int *pad_ro
   if(curr_col < num_pads) {
     while (i-offset > row_start_index && offset <= num_pads) offset++;
     grid_index = i-offset-(num_pads*len_row);
-    kern_index = len_krow/2 - offset;
+    kern_index = (len_krow >> 1) - offset;
     temp_row = len_krow-kern_index;
     iterations = (num_pads+curr_col+1) *len_krow;
   } else if (curr_col > len_row-1-num_pads){
@@ -75,11 +75,11 @@ int conv_element(int *sub_grid, int i, int rank, int *pad_row_upper, int *pad_ro
   return counter;
 }
 
-int *conv_subgrid(int *sub_grid, int rank, int *pad_row_upper, int *pad_row_lower) {
+int *conv_subgrid(int *sub_grid, int start_index, int end_index) {
   int val;
   int *new_grid = calloc(len_row * num_rows, sizeof(int));
-  for(int i = len_row*num_pads; i < (len_row * (num_rows+num_pads)); i++) {
-    val = conv_element(sub_grid, i, rank, pad_row_upper, pad_row_lower);
+  for(int i = start_index; i < end_index; i++) {
+    val = conv_element(sub_grid, i);
     new_grid[i-len_row*num_pads] = val;
   }
   return new_grid;
@@ -181,7 +181,9 @@ int main(int argc, char** argv) {
     memcpy(sub_grid, pad_row_upper, sizeof(int) * len_row * num_pads);
     memcpy(&sub_grid[len_row * num_pads], &grid[len_row * start], sizeof(int) * len_row * num_rows);
     memcpy(&sub_grid[len_row * (num_rows + num_pads)], pad_row_lower, sizeof(int) * len_row * num_pads);
-    int * changed_subgrid = conv_subgrid(sub_grid, rank, pad_row_upper, pad_row_lower);
+
+    /* Start convolution */
+    int *changed_subgrid = conv_subgrid(sub_grid, len_row*num_pads, (len_row * (num_rows+num_pads)));
 
     if(rank != 0) {
       MPI_Send(changed_subgrid, num_rows * len_row, MPI_INT, 0, 11, MPI_COMM_WORLD);

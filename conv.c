@@ -85,9 +85,6 @@ int *conv_subgrid(int *sub_grid, int *new_grid, int start_index, int end_index) 
 }
 
 int main(int argc, char** argv) {
-  MPI_Status status;
-  MPI_Status stat[4];
-  MPI_Request req[4];
   int rank;                          /* Current process identifier */
   int num_procs;                     /* Number of MPI processes in the communicator */
   uint8_t num_iterations;            /* How many times do the convolution operation */
@@ -106,6 +103,9 @@ int main(int argc, char** argv) {
   }
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  int size = (num_procs < 4) ? 4 : 4 + num_procs-1;
+  MPI_Status status[size];
+  MPI_Request req[size];
 
   /* PAPI setup */
   if(papi_rc = PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT)
@@ -143,11 +143,6 @@ int main(int argc, char** argv) {
     int sub_grid[len_row * (num_rows + (2 * num_pads))];
     pad_row_upper = sub_grid;
     pad_row_lower = &sub_grid[len_row * (num_rows + num_pads)];
-    memcpy(&sub_grid[len_row * num_pads], &grid[len_row * start], sizeof(int) * len_row * num_rows);
-
-    /* Start convolution only of central grid elements */
-    int *changed_subgrid = malloc(len_row * num_rows * sizeof(int));
-    conv_subgrid(sub_grid, changed_subgrid, len_row*(num_pads << 1), (len_row * (num_rows-num_pads)));
 
     if(num_procs > 1) {
       if (!rank) {
@@ -174,42 +169,28 @@ int main(int argc, char** argv) {
       memset(pad_row_lower, 0, len_row*sizeof(int)*num_pads);
     }
 
+    memcpy(&sub_grid[len_row * num_pads], &grid[len_row * start], sizeof(int) * len_row * num_rows);
+
+    /* Start convolution only of central grid elements */
+    int *changed_subgrid = malloc(len_row * num_rows * sizeof(int));
+    conv_subgrid(sub_grid, changed_subgrid, len_row*(num_pads << 1), (len_row * (num_rows-num_pads)));
+
     /* Pad convolution */
-    if(num_procs > 1) {
-      int completed[2];
-      MPI_Test(req, completed, stat);
-      if(!rank || rank == num_procs-1) {
-        if(!completed[0]) {
-          MPI_Wait(req, stat);
-        }
-      }
-      else {
-        MPI_Test(&req[1], &completed[1], &stat[1]);
-        if (!completed[0] || !completed[1]) {
-          MPI_Waitall(2, req, stat);
-        }
-      }
-    }
+    if(!rank || rank == num_procs-1)
+      MPI_Wait(req, status);
+    else 
+      MPI_Waitall(2, req, status);
     conv_subgrid(sub_grid, changed_subgrid, len_row*num_pads, (len_row * (num_pads << 1)));
     conv_subgrid(sub_grid, changed_subgrid, (len_row * (num_rows-num_pads)), (len_row * (num_rows+num_pads)));
-
+    
     if(rank != 0) {
-      MPI_Send(changed_subgrid, num_rows * len_row, MPI_INT, 0, 11, MPI_COMM_WORLD);
-      MPI_Recv(&grid[0], len_row * len_row, MPI_INT, 0, 10, MPI_COMM_WORLD, &status);
+      MPI_Isend(changed_subgrid, num_rows * len_row, MPI_INT, 0, 11, MPI_COMM_WORLD, req);
     } else {
-      for(int i = 0; i < num_rows * len_row; i++) {
-        grid[i] = changed_subgrid[i];
-      }
-
       for(int k = 1; k < num_procs; k++) {
-        MPI_Recv(&grid[len_row * (len_row / num_procs) * k], num_rows * len_row, MPI_INT, k, 11, MPI_COMM_WORLD, &status);
+        MPI_Irecv(&grid[len_row * (len_row / num_procs) * k], num_rows * len_row, MPI_INT, k, 11, MPI_COMM_WORLD, &req[k-1]);
       }
-
-      for(int i = 1; i < num_procs; i++) {
-        MPI_Send(grid, len_row * len_row, MPI_INT, i, 10, MPI_COMM_WORLD);
-      }
-      
     }
+    memcpy(&grid[len_row*start], changed_subgrid, num_rows * len_row * sizeof(int));
   }
 
   /* Stop the count! */ 
@@ -218,7 +199,10 @@ int main(int argc, char** argv) {
   printf("Rank: %d, total cache misses:%lld\n", rank, num_cache_miss);
   
   /* Store computed matrix */
-  if (!rank) store_data(len_grid);
+  if (!rank) {
+    MPI_Waitall(num_procs-1, req, status);
+    store_data(len_grid);
+  }
 
   MPI_Barrier(MPI_COMM_WORLD);
   if(!rank) {

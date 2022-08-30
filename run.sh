@@ -43,6 +43,10 @@ case $1 in
   java -jar jumpshot.jar conv.slog2
     ;;
 
+  paranoid)   # Temporary reduce paranoid level to allow cache event counters
+  sudo sh -c 'echo -1 >/proc/sys/kernel/perf_event_paranoid'
+    ;;
+
   *)
     echo "unknown command"
     ;;

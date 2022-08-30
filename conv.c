@@ -28,14 +28,13 @@ int *grid;                    /* Grid buffer */
 int conv_element(int*, int);
 int *conv_subgrid(int*, int*, int, int);
 void read_data(int*);
-void store_data(int);
+void store_data(FILE*, int, int, int);
 void handle_PAPI_error(int, char*);
 
 int conv_element(int *sub_grid, int i) {
   int counter = 0;
   int curr_col = i % len_row;
-  //int curr_row = i / len_row;
-  int row_start_index = (i/len_row)*len_row;
+  int row_start_index = i - curr_col;
 
   int offset = 0;
   int grid_index;
@@ -108,14 +107,14 @@ int main(int argc, char** argv) {
   MPI_Request req[size];
 
   /* PAPI setup */
-  if(papi_rc = PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT)
+  if((papi_rc = PAPI_library_init(PAPI_VER_CURRENT)) != PAPI_VER_CURRENT)
     handle_PAPI_error(papi_rc, "Error in library init.");
-  if(papi_rc = PAPI_create_eventset(&event_set) != PAPI_OK)
+  if((papi_rc = PAPI_create_eventset(&event_set)) != PAPI_OK)
     handle_PAPI_error(papi_rc, "Error while creating the PAPI eventset.");
-  if(papi_rc = PAPI_add_event(event_set, PAPI_L2_TCM) != PAPI_OK)
+  if((papi_rc = PAPI_add_event(event_set, PAPI_L2_TCM)) != PAPI_OK)
     handle_PAPI_error(papi_rc, "Error while adding L2 total cache miss event.");
   
-  if(!rank) time_start = PAPI_get_real_usec();
+  time_start = PAPI_get_real_usec();
 
   /* Read data from files in "./io-files" dir */
   read_data(&len_grid);
@@ -136,7 +135,7 @@ int main(int argc, char** argv) {
   int *pad_row_upper;
   int *pad_row_lower;
   
-  if (papi_rc = PAPI_start(event_set) != PAPI_OK) 
+  if ((papi_rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(papi_rc, "Error in PAPI_start().");
 
   for(uint8_t iters = 0; iters < num_iterations; iters++) {
@@ -176,13 +175,15 @@ int main(int argc, char** argv) {
     conv_subgrid(sub_grid, changed_subgrid, len_row*(num_pads << 1), (len_row * (num_rows-num_pads)));
 
     /* Pad convolution */
-    if(!rank || rank == num_procs-1)
-      MPI_Wait(req, status);
-    else 
-      MPI_Waitall(2, req, status);
+    if(num_procs > 1) {
+      if(!rank || rank == num_procs-1)
+        MPI_Wait(req, status);
+      else 
+        MPI_Waitall(2, req, status);
+    }
     conv_subgrid(sub_grid, changed_subgrid, len_row*num_pads, (len_row * (num_pads << 1)));
     conv_subgrid(sub_grid, changed_subgrid, (len_row * (num_rows-num_pads)), (len_row * (num_rows+num_pads)));
-    
+
     if(rank != 0) {
       MPI_Isend(changed_subgrid, num_rows * len_row, MPI_INT, 0, 11, MPI_COMM_WORLD, req);
     } else {
@@ -194,14 +195,26 @@ int main(int argc, char** argv) {
   }
 
   /* Stop the count! */ 
-  if (papi_rc = PAPI_stop(event_set, &num_cache_miss) != PAPI_OK)
+  if ((papi_rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
     handle_PAPI_error(papi_rc, "Error in PAPI_stop().");
   printf("Rank: %d, total cache misses:%lld\n", rank, num_cache_miss);
   
   /* Store computed matrix */
   if (!rank) {
+    FILE *fp_result;
+    if((fp_result = fopen(RESULT_FILE_PATH, "w")) == NULL) {
+      printf("fopen result file error\n");
+      exit(-1);
+    }
+    int first = abs(grid[0]);
+    int chars = 0;
+    while(first > 0) {              /* Retrieve how many digits has a grid value */
+      first /= 10;
+      chars++;
+    }
+    store_data(fp_result, start, chars, num_rows * len_row);
     MPI_Waitall(num_procs-1, req, status);
-    store_data(len_grid);
+    store_data(fp_result, (end+1)*len_row, chars, len_grid);
   }
 
   MPI_Barrier(MPI_COMM_WORLD);
@@ -215,7 +228,6 @@ int main(int argc, char** argv) {
 
 void read_data(int *len_grid) {
   FILE *fp_grid, *fp_kernel;         /* Input files containing grid and kernel matrix */
-  FILE *fp_result;                   /* Output file */
   uint8_t len_kernel;                /* Length of whole input kernel matrix */
 
   /* Opening input files */
@@ -229,8 +241,10 @@ void read_data(int *len_grid) {
   }
 
   /* First token represent matrix dimension */
-  fscanf(fp_grid, "%hd", &len_row);
-  fscanf(fp_kernel, "%hhd", &len_krow);
+  if(fscanf(fp_grid, "%hd", &len_row) == EOF || fscanf(fp_kernel, "%hhd", &len_krow) == EOF) {
+    printf("Error in file reading\n");
+    exit(-1);
+  }
 
   *len_grid = len_row*len_row;
   len_kernel = len_krow*len_krow;
@@ -247,24 +261,25 @@ void read_data(int *len_grid) {
   fclose(fp_kernel);
 }
 
-void store_data(int len_grid){
-  FILE *fp_result;
-  if((fp_result = fopen(RESULT_FILE_PATH, "w")) == NULL) {
-    printf("fopen result file error\n");
-    exit(-1);
-  }
-  
-  int row = 0; int col = 0;
-  while(row + col < len_grid) {
-    fprintf(fp_result, "%d ", grid[row+col]);
+void store_data(FILE *fp_result, int start_position, int chars, int end_position){
+  /* count*2 for blank chars, chars+1 in case of negative numbers */
+  char buffer[(end_position-start_position+1)*2*(chars+1)];
+  int col = start_position % len_row;
+  int row = start_position - col;
+  int offset = 0;
+
+  /* Buffer filling */
+  while(row + col < end_position) {
+    offset += sprintf(&buffer[offset], "%d ", grid[row+col]);
     if (col != len_row-1) 
       col++;
     else {
       row += len_row;
       col = 0;
-      fprintf(fp_result, "\n");
+      offset += sprintf(&buffer[offset], "\n");
     }
   }
+  fwrite(buffer, sizeof(char), offset, fp_result);
 }
 
 void handle_PAPI_error(int rc, char *msg) {

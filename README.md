@@ -1,4 +1,4 @@
-# Parallelizing the Convolution Operation using MPI
+# Parallelizing the convolution operation using MPI
 
 Project work for "Sistemi concorrenti" course at Unisannio. This repository was forked from [0xnirmal/Parallel-Convolution-MPI](https://github.com/0xnirmal/Parallel-Convolution-MPI) and the documentation about the convolution operation has been moved in [docs](https://github.com/luigiocone/Parallel-Convolution-MPI/tree/master/docs) folder.
 
@@ -37,5 +37,8 @@ If source matrix is an image, source and result images could be plot with python
 cd io-files
 python image.py
 ```
-The following image is an output example. Left image is the source matrix, the right image has been computed using a _ridge detection kernel_ after one convolution iteration.
+The following image is an output example. Left image is the source matrix, the right image has been computed (after one convolution iteration) using a _ridge detection kernel_.
+![Ridge detection (normalized)](https://github.com/luigiocone/Parallel-Convolution-MPI/blob/master/docs/img/ridge_detection_camera_normalization.png?raw=true)
+
+The previous image was computed using also a normalization process (as described [here](https://it.mathworks.com/help/vision/ref/2dconvolution.html)), without the normalization the result would be the following: 
 ![Ridge detection](https://github.com/luigiocone/Parallel-Convolution-MPI/blob/master/docs/img/ridge_detection_camera.png?raw=true)

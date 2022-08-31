@@ -7,9 +7,9 @@
 #include <stdint.h>
 #include <assert.h>
 #include <string.h>
-#include <sys/time.h>
-#include "papi.h"
-#include "mpi.h"
+#include <math.h>
+#include <papi.h>
+#include <mpi.h>
 
 #define DEFAULT_ITERATIONS 1
 #define GRID_FILE_PATH "./io-files/grid.txt"
@@ -17,6 +17,7 @@
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_DIGITS 13    /* Standard "%e" format has at most this num of digits (e.g. -9.075626e+20) */
 
+float normalize(float, float*);
 float conv_element(float*, int);
 void conv_subgrid(float*, float*, int, int);
 void read_data(int*);
@@ -34,6 +35,7 @@ float *grid;                  /* Grid buffer */
 
 float conv_element(float *sub_grid, int i) {
   float counter = 0;
+  float matrix[len_krow*len_krow];
   int curr_col = i % len_row;
   int row_start_index = i - curr_col;
 
@@ -49,6 +51,7 @@ float conv_element(float *sub_grid, int i) {
     kern_index = (len_krow >> 1) - offset;
     temp_row = len_krow-kern_index;
     iterations = (num_pads+curr_col+1) *len_krow;
+    memset(matrix, 0, len_krow*len_krow);
   } else if (curr_col > len_row-1-num_pads){
     int row_end_index = row_start_index + len_row - 1;
     while (i+offset <= row_end_index && offset <= num_pads) offset++;
@@ -56,6 +59,7 @@ float conv_element(float *sub_grid, int i) {
     kern_index = 0;
     temp_row = len_krow-offset;
     iterations = (num_pads+(len_row-curr_col)) *len_krow;
+    memset(matrix, 0, len_krow*len_krow);
   } else {
     grid_index = i-num_pads-(num_pads*len_row);
     kern_index = 0;
@@ -65,6 +69,7 @@ float conv_element(float *sub_grid, int i) {
 
   for (int iter=0, offset=0; iter < iterations; iter++) {
     counter += sub_grid[grid_index+offset] * kernel[kern_index+offset];
+    matrix[kern_index+offset] = sub_grid[grid_index+offset];
     if (offset == temp_row-1) { 
       grid_index += len_row;
       kern_index += len_krow;
@@ -72,7 +77,24 @@ float conv_element(float *sub_grid, int i) {
     } else offset++;
   }
 
-  return counter;
+  return normalize(counter, matrix);
+}
+
+float normalize(float conv_res, float *matrix) {
+  float matrix_pow_sum = 0;
+  float kernel_pow_sum = 0;
+  
+  for(int pos = 0; pos < len_krow*len_krow; pos++){
+    matrix_pow_sum += matrix[pos] * matrix[pos];
+    kernel_pow_sum += kernel[pos] * kernel[pos];
+  }
+
+  float res = conv_res / sqrt(matrix_pow_sum * matrix_pow_sum);
+  if(isnan(res)) {
+    /* Resolution problem if too many convolution iteration are done. The mean value is returned */
+    return 0;
+  }
+  return res;
 }
 
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {

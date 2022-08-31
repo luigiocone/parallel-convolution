@@ -16,7 +16,8 @@ def img_to_matrix(img):
     
     f = open(GRID_FILE_NAME, "w")
     f.write("{0}\n".format(img.shape[0]))
-    np.savetxt(f, img, delimiter=' ', fmt="%d")
+    # Format "%e" has six digits after point as standard 
+    np.savetxt(f, img, delimiter=' ', fmt="%e")
     f.close()
 
 def main():
@@ -26,8 +27,8 @@ def main():
     #return;
     
     # From matrix file to img
-    src_img = np.genfromtxt(GRID_FILE_NAME,   delimiter=' ', dtype=int, skip_header=1)
-    res_img = np.genfromtxt(RESULT_FILE_NAME, delimiter=' ', dtype=int,skip_header=2, skip_footer=2, usecols=range(2,510))
+    src_img = np.genfromtxt(GRID_FILE_NAME,   delimiter=' ', dtype=float, skip_header=1)
+    res_img = np.genfromtxt(RESULT_FILE_NAME, delimiter=' ', dtype=float, skip_header=2, skip_footer=2, usecols=range(2,510))
 
     #subplot(r,c) provide the no. of rows and columns
     f, axarr = plt.subplots(1,2) 

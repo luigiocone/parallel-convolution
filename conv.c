@@ -18,7 +18,6 @@
 #define MAX_DIGITS 13    /* Standard "%e" format has at most this num of digits (e.g. -9.075626e+20) */
 
 float normalize(float, float*);
-float conv_element(float*, int);
 void conv_subgrid(float*, float*, int, int);
 void read_data(int*);
 void store_data(FILE*, int, int);
@@ -34,55 +33,6 @@ float *kernel;                /* Kernel buffer */
 float *grid;                  /* Grid buffer */
 
 
-float conv_element(float *sub_grid, int i) {
-  float matrix[kern_size];       /* Temp buffer used for normalization */
-  int col = i % grid_width;      /* Index of current column */
-  int row_start = i - col;       /* Index of the first element in current row */
-
-  int offset = 0;
-  int grid_index;
-  int kern_index;
-  int kern_end;
-  int iterations = 0;
-
-  if(col < num_pads) {
-    while (i-offset > row_start && offset <= num_pads) offset++;
-    grid_index = i-offset-pad_size;
-    kern_index = (kern_width >> 1) - offset;
-    kern_end = kern_width-kern_index;
-    iterations = (num_pads+col+1) *kern_width;
-    memset(matrix, 0, kern_size*sizeof(float));
-  } else if (col > grid_width-1-num_pads){
-    int row_end = row_start + grid_width - 1;
-    while (i+offset <= row_end && offset <= num_pads) offset++;
-    grid_index = i-num_pads-pad_size;
-    kern_index = 0;
-    kern_end = kern_width-offset;
-    iterations = (num_pads + grid_width-col) *kern_width;
-    memset(matrix, 0, kern_size*sizeof(float));
-  } else {
-    grid_index = i-num_pads-pad_size;
-    kern_index = 0;
-    kern_end = kern_width;
-    iterations = kern_size;
-  }
-
-  float result = 0;
-  for (int iter=0, offset=0; iter < iterations; iter++) {
-    result += sub_grid[grid_index+offset] * kernel[kern_index+offset];
-    matrix[kern_index+offset] = sub_grid[grid_index+offset];
-    if (offset != kern_end-1) 
-      offset++;
-    else { 
-      grid_index += grid_width;
-      kern_index += kern_width;
-      offset = 0;
-    }
-  }
-
-  return normalize(result, matrix);
-}
-
 float normalize(float conv_res, float *matrix) {
   float matrix_dot_sum = 0;
   for(int pos = 0; pos < kern_size; pos++){
@@ -90,16 +40,72 @@ float normalize(float conv_res, float *matrix) {
   }
 
   float res = conv_res / sqrt(matrix_dot_sum * kern_dot_sum);
+  /* Resolution problem if too many convolution iteration are done. The mean value is returned */
   if(isnan(res)) {
-    /* Resolution problem if too many convolution iteration are done. The mean value is returned */
     return 0;
   }
   return res;
 }
 
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {
+  float result;
+  float matrix[kern_size];                 /* Temp buffer used for normalization */
+  int col = start_index % grid_width;      /* Index of current column */
+  int row_start = start_index - col;       /* Index of the first element in current row */
+
+  int offset;                              /* How far is current element from its closest border */
+  int grid_index;
+  int kern_index;
+  int kern_end;                            /* Describes when it's time to change row */
+  int iterations;
+
   for(int i = start_index; i < end_index; i++) {
-    new_grid[i-pad_size] = conv_element(sub_grid, i);
+    /* Setting indexes for current element */
+    if(col < num_pads) {
+      for(offset = 0; i-offset > row_start && offset <= num_pads; offset++);
+      grid_index = i-offset-pad_size;
+      kern_index = (kern_width >> 1) - offset;
+      kern_end = kern_width-kern_index;
+      iterations = (num_pads+col+1) *kern_width;
+      memset(matrix, 0, kern_size*sizeof(float));
+    } else if (col > grid_width-1-num_pads){
+      int row_end = row_start + grid_width - 1;
+      for(offset = 0; i+offset <= row_end && offset <= num_pads; offset++);
+      grid_index = i-num_pads-pad_size;
+      kern_index = 0;
+      kern_end = kern_width-offset;
+      iterations = (num_pads + grid_width-col) *kern_width;
+      memset(matrix, 0, kern_size*sizeof(float));
+    } else {
+      grid_index = i-num_pads-pad_size;
+      kern_index = 0;
+      kern_end = kern_width;
+      iterations = kern_size;
+    }
+
+    /* Convolution */
+    result = 0;
+    for (int iter=0, offset=0; iter < iterations; iter++) {
+      result += sub_grid[grid_index+offset] * kernel[kern_index+offset];
+      matrix[kern_index+offset] = sub_grid[grid_index+offset];
+      if (offset != kern_end-1) 
+        offset++;
+      else { 
+        grid_index += grid_width;
+        kern_index += kern_width;
+        offset = 0;
+      }
+    }
+
+    new_grid[i-pad_size] = normalize(result, matrix);
+
+    /* Setting row and col index for next element */
+    if (col != grid_width-1)
+      col++;
+    else{
+      row_start += grid_width;
+      col = 0;
+    }
   }
 }
 

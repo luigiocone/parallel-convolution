@@ -51,7 +51,7 @@ float conv_element(float *sub_grid, int i) {
     kern_index = (len_krow >> 1) - offset;
     temp_row = len_krow-kern_index;
     iterations = (num_pads+curr_col+1) *len_krow;
-    memset(matrix, 0, len_krow*len_krow);
+    memset(matrix, 0, len_krow*len_krow*sizeof(float));
   } else if (curr_col > len_row-1-num_pads){
     int row_end_index = row_start_index + len_row - 1;
     while (i+offset <= row_end_index && offset <= num_pads) offset++;
@@ -59,7 +59,7 @@ float conv_element(float *sub_grid, int i) {
     kern_index = 0;
     temp_row = len_krow-offset;
     iterations = (num_pads+(len_row-curr_col)) *len_krow;
-    memset(matrix, 0, len_krow*len_krow);
+    memset(matrix, 0, len_krow*len_krow*sizeof(float));
   } else {
     grid_index = i-num_pads-(num_pads*len_row);
     kern_index = 0;
@@ -89,7 +89,7 @@ float normalize(float conv_res, float *matrix) {
     kernel_pow_sum += kernel[pos] * kernel[pos];
   }
 
-  float res = conv_res / sqrt(matrix_pow_sum * matrix_pow_sum);
+  float res = conv_res / sqrt(matrix_pow_sum * kernel_pow_sum);
   if(isnan(res)) {
     /* Resolution problem if too many convolution iteration are done. The mean value is returned */
     return 0;

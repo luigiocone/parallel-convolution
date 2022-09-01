@@ -79,8 +79,8 @@ int main(int argc, char** argv) {
   int grid_height = (grid_width / num_procs);    /* grid matrix is square, so grid_width and grid_height are the same before data splitting */
   int start = grid_height * rank;
   int end = grid_height - 1 + start;
-  int num_rows = end + 1 - start;                /* Number of rows assigned to one process */
-  int assigned_rows_size = num_rows*grid_width;
+  int assigned_rows = end + 1 - start;                /* Number of rows assigned to one process */
+  int assigned_rows_size = assigned_rows*grid_width;
   uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
   uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
 
@@ -88,17 +88,14 @@ int main(int argc, char** argv) {
   float *upper = &grid[grid_width * start];
   float *lower = &grid[grid_width * (end - num_pads + 1)];
   /* Rows holded by other process and needed for this one */
-  float *pad_row_upper;
-  float *pad_row_lower;
+  float sub_grid[grid_width * (assigned_rows + (2 * num_pads))];
+  float *pad_row_upper = sub_grid;
+  float *pad_row_lower = &sub_grid[grid_width * (assigned_rows + num_pads)];
   
   if ((papi_rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(papi_rc, "Error in PAPI_start().");
 
   for(uint8_t iters = 0; iters < num_iterations; iters++) {
-    float sub_grid[grid_width * (num_rows + (2 * num_pads))];
-    pad_row_upper = sub_grid;
-    pad_row_lower = &sub_grid[grid_width * (num_rows + num_pads)];
-
     if(num_procs > 1) {
       if (!rank) {
         /* Process with rank 0 doesn't have a "prev" process */
@@ -128,7 +125,7 @@ int main(int argc, char** argv) {
 
     /* Start convolution only of central grid elements */
     float *changed_subgrid = malloc(assigned_rows_size * sizeof(float));
-    conv_subgrid(sub_grid, changed_subgrid, grid_width*(num_pads << 1), (grid_width * (num_rows-num_pads)));
+    conv_subgrid(sub_grid, changed_subgrid, grid_width*(num_pads << 1), (grid_width * (assigned_rows-num_pads)));
 
     /* Pad convolution */
     if(num_procs > 1) {
@@ -138,7 +135,7 @@ int main(int argc, char** argv) {
         MPI_Waitall(2, req, status);
     }
     conv_subgrid(sub_grid, changed_subgrid, pad_size, (grid_width * (num_pads << 1)));
-    conv_subgrid(sub_grid, changed_subgrid, (grid_width * (num_rows-num_pads)), (grid_width * (num_rows+num_pads)));
+    conv_subgrid(sub_grid, changed_subgrid, (grid_width * (assigned_rows-num_pads)), (grid_width * (assigned_rows+num_pads)));
 
     if(rank != 0) {
       MPI_Isend(changed_subgrid, assigned_rows_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
@@ -172,9 +169,12 @@ int main(int argc, char** argv) {
   if(!rank) {
     time_stop = PAPI_get_real_usec();
     printf("(PAPI) Elapsed time: %lld us\n", (time_stop - time_start));
+    free(grid);
+    free(kernel);
   }
 
   MPI_Finalize();
+  return 0;
 }
 
 
@@ -290,11 +290,11 @@ void read_data(int *grid_size) {
 
 void store_data(FILE *fp_result, int start_position, int end_position){
   /* count*2 for blank chars, MAX_DIGITS+1 in case of negative numbers */
-  char buffer[(end_position-start_position+1)*2*(MAX_DIGITS+1)];
+  char* buffer = malloc((end_position-start_position+1)*2*(MAX_DIGITS+1)*sizeof(char));
   int col = start_position % grid_width;
   int row = start_position - col;
   int offset = 0;
-
+  
   /* Buffer filling */
   while(row + col < end_position) {
     offset += sprintf(&buffer[offset], "%e ", grid[row+col]);
@@ -307,6 +307,7 @@ void store_data(FILE *fp_result, int start_position, int end_position){
     }
   }
   fwrite(buffer, sizeof(char), offset, fp_result);
+  free(buffer);
 }
 
 void handle_PAPI_error(int rc, char *msg) {

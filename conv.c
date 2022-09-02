@@ -15,7 +15,7 @@
 #define GRID_FILE_PATH "./io-files/grid.txt"
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
-#define MAX_DIGITS 13    /* Standard "%e" format has at most this num of digits (e.g. -9.075626e+20) */
+#define MAX_CHARS 13    /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
 
 void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
   
   /* MPI Setup */
   if(MPI_Init(&argc, &argv) != MPI_SUCCESS) {
-    printf("MPI_Init error\n");
+    fprintf(stderr, "MPI_Init error\n");
     exit(-1);
   }
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
   }
 
   /* Data splitting */
-  int grid_height = (grid_width / num_procs);    /* grid matrix is square, so grid_width and grid_height are the same before data splitting */
+  int grid_height = (grid_width / num_procs);         /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
   int start = grid_height * rank;
   int end = grid_height - 1 + start;
   int assigned_rows = end + 1 - start;                /* Number of rows assigned to one process */
@@ -91,6 +91,13 @@ int main(int argc, char** argv) {
   float sub_grid[grid_width * (assigned_rows + (2 * num_pads))];
   float *pad_row_upper = sub_grid;
   float *pad_row_lower = &sub_grid[grid_width * (assigned_rows + num_pads)];
+
+  if (rank == 0) {
+    memset(pad_row_upper, 0, pad_size*sizeof(float));
+  }
+  if (rank == (num_procs - 1)) {
+    memset(pad_row_lower, 0, pad_size*sizeof(float));
+  }
   
   if ((papi_rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(papi_rc, "Error in PAPI_start().");
@@ -113,13 +120,6 @@ int main(int argc, char** argv) {
         MPI_Irecv(pad_row_lower, pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, &req[1]);
       }  
     } 
-
-    if (rank == 0) {
-      memset(pad_row_upper, 0, pad_size*sizeof(float));
-    }
-    if (rank == (num_procs - 1)) {
-      memset(pad_row_lower, 0, pad_size*sizeof(float));
-    }
 
     memcpy(&sub_grid[pad_size], &grid[grid_width * start], sizeof(float) * assigned_rows_size);
 
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
   if (!rank) {
     FILE *fp_result;
     if((fp_result = fopen(RESULT_FILE_PATH, "w")) == NULL) {
-      printf("fopen result file error\n");
+      fprintf(stderr, "Error while creating and/or opening result file\n");
       exit(-1);
     }
     store_data(fp_result, start, assigned_rows_size);
@@ -256,20 +256,23 @@ float normalize(float conv_res, float *matrix) {
 
 void read_data(int *grid_size) {
   FILE *fp_grid, *fp_kernel;         /* Input files containing grid and kernel matrix */
+  char* buffer;                      /* Buffer storing fread() result */
+  int max_grid_chars, max_kern_chars;
+  int i, offset;
 
   /* Opening input files */
   if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
-    printf("fopen grid file error");
+    fprintf(stderr, "Error while opening grid file\n");
     exit(-1);
   }
   if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
-    printf("fopen kernel file error");
+    fprintf(stderr, "Error while opening kernel file\n");
     exit(-1);
   }
 
   /* First token represent matrix dimension */
-  if(fscanf(fp_grid, "%hd", &grid_width) == EOF || fscanf(fp_kernel, "%hhd", &kern_width) == EOF) {
-    printf("Error in file reading\n");
+  if(fscanf(fp_grid, "%hd\n", &grid_width) == EOF || fscanf(fp_kernel, "%hhd\n", &kern_width) == EOF) {
+    fprintf(stderr, "Error in file reading: first element should be the row (or column) length of a square matrix\n");
     exit(-1);
   }
 
@@ -277,20 +280,51 @@ void read_data(int *grid_size) {
   kern_size = kern_width*kern_width;
   num_pads = (kern_width - 1) >> 1;
   pad_size = grid_width * num_pads;
+  max_grid_chars = *grid_size * 2 * MAX_CHARS * sizeof(char);
+  max_kern_chars =  kern_size * 2 * MAX_CHARS * sizeof(char);
 
-  /* Reading data from files */
-  grid = malloc(*grid_size*sizeof(float));
-  for(int i = 0; fscanf(fp_grid, "%e", &grid[i]) != EOF; i++);
+  /* Grid data from file */
+  buffer = malloc(max_grid_chars * sizeof(char));
+  grid = malloc(*grid_size * sizeof(float));
+  fread(buffer, sizeof(char), max_grid_chars, fp_grid);
   fclose(fp_grid);
+  
+  offset = 0;
+  for(i = 0; i < *grid_size && offset < max_grid_chars; i++) { 
+    grid[i] = atof(&buffer[offset]);
+    while(buffer[offset] != ' ' && buffer[offset] != '\n') offset++;
+    while(buffer[offset] == ' ' || buffer[offset] == '\n') offset++;
+  }
 
+  if(i != *grid_size) {
+    fprintf(stderr, "Error in file reading: number of grid elements read is different from the expected amount\n");
+    free(buffer); free(grid);
+    exit(-1);
+  }
+
+  /* Kernel data from file */
   kernel = malloc(kern_size*sizeof(float));
-  for(int i = 0; fscanf(fp_kernel, "%f", &kernel[i]) != EOF; i++);
+  offset = fread(buffer, sizeof(char), max_kern_chars, fp_kernel);
+  buffer[offset] = '\n';
   fclose(fp_kernel);
+  
+  offset = 0;
+  for(i = 0; i < kern_size && offset < max_kern_chars; i++) {
+    kernel[i] = atof(&buffer[offset]);
+    while(buffer[offset] != ' ' && buffer[offset] != '\n') offset++;
+    while(buffer[offset] == ' ' || buffer[offset] == '\n') offset++;
+  }
+
+  if(i != kern_size) {
+    fprintf(stderr, "Error in file reading: number of kernel elements read is different from the expected amount\n");
+    exit(-1);
+  }
+  free(buffer);
 }
 
 void store_data(FILE *fp_result, int start_position, int end_position){
-  /* count*2 for blank chars, MAX_DIGITS+1 in case of negative numbers */
-  char* buffer = malloc((end_position-start_position+1)*2*(MAX_DIGITS+1)*sizeof(char));
+  /* Two multiplication for blank chars */
+  char* buffer = malloc((end_position-start_position+1) * 2 * MAX_CHARS * sizeof(char));
   int col = start_position % grid_width;
   int row = start_position - col;
   int offset = 0;
@@ -312,9 +346,9 @@ void store_data(FILE *fp_result, int start_position, int end_position){
 
 void handle_PAPI_error(int rc, char *msg) {
   char error_str[PAPI_MAX_STR_LEN];
-  memset(error_str, 0, PAPI_MAX_STR_LEN);
+  memset(error_str, 0, sizeof(char)*PAPI_MAX_STR_LEN);
 
-  printf("%s\nReturn code: %d - PAPI error message:\n", msg, rc);
+  fprintf(stderr, "%s\nReturn code: %d - PAPI error message:\n", msg, rc);
   PAPI_perror(error_str); PAPI_strerror(rc);
   exit(-1);
 }

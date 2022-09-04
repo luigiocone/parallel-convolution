@@ -22,7 +22,7 @@
 void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
 void init_read(FILE*, FILE*);
-void read_data(FILE*, int, int);
+void read_data(FILE*, int, int, int);
 void store_data(FILE*, int, int);
 void handle_PAPI_error(int, char*);
 
@@ -32,14 +32,15 @@ uint16_t grid_width;          /* Number of elements in one grid matrix row */
 uint64_t grid_size;           /* Number of elements in whole grid matrix */
 uint16_t kern_size;           /* Number of elements in whole kernel matrix */
 uint16_t pad_size;            /* Number of elements in the pad section of the grid matrix */
+int num_procs;                          /* Number of MPI processes in the communicator */
 float kern_dot_sum;           /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
 float *kernel;                /* Kernel buffer */
 float *grid;                  /* Grid buffer */
+float *old_grid;              /* Old grid buffer */
 
 
 int main(int argc, char** argv) {
   int rank;                               /* Current process identifier */
-  int num_procs;                          /* Number of MPI processes in the communicator */
   uint8_t num_iterations;                 /* How many times do the convolution operation */
   int provided;
   //pthread_t threads[NUM_THREADS];
@@ -96,29 +97,25 @@ int main(int argc, char** argv) {
 
   /* Data splitting */
   int grid_height = (grid_width / num_procs);         /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
-  int start = grid_height * rank;
-  int end = grid_height - 1 + start;
-  int assigned_rows = end + 1 - start;                /* Number of rows assigned to one process */
-  int assigned_rows_size = assigned_rows*grid_width;
-  read_data(fp_grid, start, assigned_rows);
-  return 0;
+  int start = grid_height * rank;                     /* Index of the first row for current process */
+  int end = grid_height - 1 + start;                  /* Index of the final row for current process */
+  int assigned_rows = end + 1 - start;                /* Number of rows assigned to current process */
+  int assigned_rows_size = assigned_rows*grid_width;  /* Number of elements assigned to current process */
+  read_data(fp_grid, start, assigned_rows, rank);
   uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
   uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
+  
+  /* First iteration - No rows exchange needed */
+  conv_subgrid(old_grid, grid, pad_size, assigned_rows_size+pad_size);
+  return 0;
+  /* Second (or higher) iterations*/
 
   /* Rows holded by this process and needed by another one */
-  float *upper = &grid[grid_width * start];
-  float *lower = &grid[grid_width * (end - num_pads + 1)];
+  float *upper = &grid[pad_size];
+  float *lower = &grid[assigned_rows_size];
   /* Rows holded by other process and needed for this one */
-  float sub_grid[grid_width * (assigned_rows + (2 * num_pads))];
-  float *pad_row_upper = sub_grid;
-  float *pad_row_lower = &sub_grid[grid_width * (assigned_rows + num_pads)];
-
-  if (rank == 0) {
-    memset(pad_row_upper, 0, pad_size*sizeof(float));
-  }
-  if (rank == (num_procs - 1)) {
-    memset(pad_row_lower, 0, pad_size*sizeof(float));
-  }
+  float *pad_row_upper = old_grid;
+  float *pad_row_lower = &old_grid[assigned_rows_size+pad_size];
   
   if ((rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(rc, "Error in PAPI_start().");
@@ -142,8 +139,8 @@ int main(int argc, char** argv) {
       }  
     } 
 
-    memcpy(&sub_grid[pad_size], &grid[grid_width * start], sizeof(float) * assigned_rows_size);
-
+    //memcpy(&sub_grid[pad_size], &grid[grid_width * start], sizeof(float) * assigned_rows_size);
+    float* sub_grid = malloc(500);
     /* Start convolution only of central grid elements */
     float *changed_subgrid = malloc(assigned_rows_size * sizeof(float));
     conv_subgrid(sub_grid, changed_subgrid, grid_width*(num_pads << 1), (grid_width * (assigned_rows-num_pads)));
@@ -249,7 +246,7 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       }
     }
 
-    new_grid[i-pad_size] = normalize(result, matrix);
+    new_grid[i] = normalize(result, matrix);
 
     /* Setting row and col index for next element */
     if (col != grid_width-1)
@@ -315,15 +312,25 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
   free(buffer);
 }
 
-void read_data(FILE *fp_grid, int start, int assigned_rows) {
+void read_data(FILE *fp_grid, int start, int assigned_rows, int rank) {
   /* Non-blank chars + Blank chars */
   int grid_row_chars = (grid_width * (MAX_CHARS-1) + grid_width) * sizeof(char);
-  int buffer_size = grid_row_chars * assigned_rows;
+  int buffer_size;
   char* buffer;
   int i, offset;
 
-  /* Grid data from file */
-  start = grid_row_chars * start;
+  if(!rank || rank == num_procs-1)
+    buffer_size = grid_row_chars * (assigned_rows + num_pads);
+  else 
+    buffer_size = grid_row_chars * (assigned_rows + num_pads * 2);
+
+  if(!rank)
+    start = grid_row_chars * start;
+  else 
+    start = grid_row_chars * (start - num_pads);
+
+
+  /* Grid data from file */  
   if(start != 0 && fseek(fp_grid, start, SEEK_CUR)) {
     fprintf(stderr, "Error while executing fseek\n");
     exit(-1);
@@ -333,14 +340,31 @@ void read_data(FILE *fp_grid, int start, int assigned_rows) {
   fclose(fp_grid);
 
   offset = 0;
-  grid = malloc(assigned_rows * grid_width * sizeof(float));
-  for(i = 0; i < assigned_rows * grid_width && offset < buffer_size; i++) { 
-    grid[i] = atof(&buffer[offset]);
+  grid = malloc((assigned_rows + num_pads*2) * grid_width * sizeof(float));
+  old_grid = malloc((assigned_rows + num_pads*2) * grid_width * sizeof(float));
+
+  i = 0;
+  int iterations = (assigned_rows + num_pads) * grid_width;
+  if(!rank){
+    memset(grid, 0, pad_size * sizeof(float));
+    memset(old_grid, 0, pad_size * sizeof(float));
+    i = pad_size;
+    iterations = (assigned_rows + num_pads*2) * grid_width;
+  }
+  else if(rank == num_procs-1){
+    memset(&grid[(assigned_rows+num_pads) * grid_width], 0, pad_size * sizeof(float));
+    memset(&old_grid[(assigned_rows+num_pads) * grid_width], 0, pad_size * sizeof(float));
+  }
+  else
+    iterations = (assigned_rows + num_pads*2) * grid_width;
+
+  for(; i < iterations && offset < buffer_size; i++) { 
+    old_grid[i] = atof(&buffer[offset]);
     while(buffer[offset] >= '+') offset++;
     while(buffer[offset] != '\0' && buffer[offset] < '+') offset++;
   }
 
-  if(i != assigned_rows * grid_width) {
+  if(i != iterations) {
     fprintf(stderr, "Error in file reading: number of grid elements read is different from the expected amount\n");
     exit(-1);
   }

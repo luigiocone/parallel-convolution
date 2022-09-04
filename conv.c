@@ -10,22 +10,26 @@
 #include <math.h>
 #include <papi.h>
 #include <mpi.h>
+#include <pthread.h>
 
 #define DEFAULT_ITERATIONS 1
 #define GRID_FILE_PATH "./io-files/grid.txt"
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13    /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
+#define NUM_THREADS 1
 
 void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
-void read_data(int*);
+void init_read(FILE*, FILE*);
+void read_data(FILE*, int, int);
 void store_data(FILE*, int, int);
 void handle_PAPI_error(int, char*);
 
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
 uint8_t kern_width;           /* Number of elements in one kernel matrix row */
 uint16_t grid_width;          /* Number of elements in one grid matrix row */
+uint64_t grid_size;           /* Number of elements in whole grid matrix */
 uint16_t kern_size;           /* Number of elements in whole kernel matrix */
 uint16_t pad_size;            /* Number of elements in the pad section of the grid matrix */
 float kern_dot_sum;           /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
@@ -34,20 +38,26 @@ float *grid;                  /* Grid buffer */
 
 
 int main(int argc, char** argv) {
-  int rank;                          /* Current process identifier */
-  int num_procs;                     /* Number of MPI processes in the communicator */
-  uint8_t num_iterations;            /* How many times do the convolution operation */
-  int grid_size;                     /* Number of elements of whole grid matrix */
-  long_long time_start, time_stop;   /* To measure execution time */
-  long_long num_cache_miss;          /* To measure number of cache miss */
-  int event_set = PAPI_NULL;         /* Group of hardware events for PAPI library */
-  int papi_rc;                       /* PAPI return code, used in error handling */
+  int rank;                               /* Current process identifier */
+  int num_procs;                          /* Number of MPI processes in the communicator */
+  uint8_t num_iterations;                 /* How many times do the convolution operation */
+  int provided;
+  //pthread_t threads[NUM_THREADS];
+  FILE *fp_grid, *fp_kernel;              /* I/O files for grid and kernel matrices */
+  long_long time_start, time_stop;        /* To measure execution time */
+  long_long num_cache_miss;               /* To measure number of cache misses */
+  int event_set = PAPI_NULL;              /* Group of hardware events for PAPI library */
+  int rc;                                 /* Return code used in error handling */
 
   num_iterations = (argc == 2) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   
   /* MPI Setup */
-  if(MPI_Init(&argc, &argv) != MPI_SUCCESS) {
-    fprintf(stderr, "MPI_Init error\n");
+  if((rc = MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided)) != MPI_SUCCESS) {
+    fprintf(stderr, "MPI_Init error. Return code: %d\n", rc);
+    exit(-1);
+  } 
+  if(provided < MPI_THREAD_FUNNELED) {
+    fprintf(stderr, "Minimum MPI threading level requested: %d (provided: %d)\n", MPI_THREAD_FUNNELED, provided);
     exit(-1);
   }
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
@@ -57,17 +67,26 @@ int main(int argc, char** argv) {
   MPI_Request req[size];
 
   /* PAPI setup */
-  if((papi_rc = PAPI_library_init(PAPI_VER_CURRENT)) != PAPI_VER_CURRENT)
-    handle_PAPI_error(papi_rc, "Error in library init.");
-  if((papi_rc = PAPI_create_eventset(&event_set)) != PAPI_OK)
-    handle_PAPI_error(papi_rc, "Error while creating the PAPI eventset.");
-  if((papi_rc = PAPI_add_event(event_set, PAPI_L2_TCM)) != PAPI_OK)
-    handle_PAPI_error(papi_rc, "Error while adding L2 total cache miss event.");
+  if((rc = PAPI_library_init(PAPI_VER_CURRENT)) != PAPI_VER_CURRENT)
+    handle_PAPI_error(rc, "Error in library init.");
+  if((rc = PAPI_create_eventset(&event_set)) != PAPI_OK)
+    handle_PAPI_error(rc, "Error while creating the PAPI eventset.");
+  if((rc = PAPI_add_event(event_set, PAPI_L2_TCM)) != PAPI_OK)
+    handle_PAPI_error(rc, "Error while adding L2 total cache miss event.");
   
   time_start = PAPI_get_real_usec();
 
   /* Read data from files in "./io-files" dir */
-  read_data(&grid_size);
+  /* Opening input files */
+  if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
+    fprintf(stderr, "Error while opening grid file\n");
+    exit(-1);
+  }
+  if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
+    fprintf(stderr, "Error while opening kernel file\n");
+    exit(-1);
+  }
+  init_read(fp_grid, fp_kernel);
   assert(grid_width % num_procs == 0);
 
   /* Computation of sum(dot(kernel, kernel)) */
@@ -81,6 +100,8 @@ int main(int argc, char** argv) {
   int end = grid_height - 1 + start;
   int assigned_rows = end + 1 - start;                /* Number of rows assigned to one process */
   int assigned_rows_size = assigned_rows*grid_width;
+  read_data(fp_grid, start, assigned_rows);
+  return 0;
   uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
   uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
 
@@ -99,8 +120,8 @@ int main(int argc, char** argv) {
     memset(pad_row_lower, 0, pad_size*sizeof(float));
   }
   
-  if ((papi_rc = PAPI_start(event_set)) != PAPI_OK) 
-    handle_PAPI_error(papi_rc, "Error in PAPI_start().");
+  if ((rc = PAPI_start(event_set)) != PAPI_OK) 
+    handle_PAPI_error(rc, "Error in PAPI_start().");
 
   for(uint8_t iters = 0; iters < num_iterations; iters++) {
     if(num_procs > 1) {
@@ -148,8 +169,8 @@ int main(int argc, char** argv) {
   }
 
   /* Stop the count! */ 
-  if ((papi_rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
-    handle_PAPI_error(papi_rc, "Error in PAPI_stop().");
+  if ((rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
+    handle_PAPI_error(rc, "Error in PAPI_stop().");
   printf("Rank: %d, total cache misses:%lld\n", rank, num_cache_miss);
   
   /* Store computed matrix */
@@ -254,21 +275,10 @@ float normalize(float conv_res, float *matrix) {
   return res;
 }
 
-void read_data(int *grid_size) {
-  FILE *fp_grid, *fp_kernel;         /* Input files containing grid and kernel matrix */
-  char* buffer;                      /* Buffer storing fread() result */
-  int max_grid_chars, max_kern_chars;
+void init_read(FILE *fp_grid, FILE *fp_kernel){
+  char *buffer;
+  int kern_row_chars, buffer_size;
   int i, offset;
-
-  /* Opening input files */
-  if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
-    fprintf(stderr, "Error while opening grid file\n");
-    exit(-1);
-  }
-  if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
-    fprintf(stderr, "Error while opening kernel file\n");
-    exit(-1);
-  }
 
   /* First token represent matrix dimension */
   if(fscanf(fp_grid, "%hd\n", &grid_width) == EOF || fscanf(fp_kernel, "%hhd\n", &kern_width) == EOF) {
@@ -276,47 +286,62 @@ void read_data(int *grid_size) {
     exit(-1);
   }
 
-  *grid_size = grid_width*grid_width;
+  grid_size = grid_width*grid_width;
   kern_size = kern_width*kern_width;
   num_pads = (kern_width - 1) >> 1;
   pad_size = grid_width * num_pads;
-  max_grid_chars = *grid_size * 2 * MAX_CHARS * sizeof(char);
-  max_kern_chars =  kern_size * 2 * MAX_CHARS * sizeof(char);
-
-  /* Grid data from file */
-  buffer = malloc(max_grid_chars * sizeof(char));
-  grid = malloc(*grid_size * sizeof(float));
-  fread(buffer, sizeof(char), max_grid_chars, fp_grid);
-  fclose(fp_grid);
-  
-  offset = 0;
-  for(i = 0; i < *grid_size && offset < max_grid_chars; i++) { 
-    grid[i] = atof(&buffer[offset]);
-    while(buffer[offset] != ' ' && buffer[offset] != '\n') offset++;
-    while(buffer[offset] == ' ' || buffer[offset] == '\n') offset++;
-  }
-
-  if(i != *grid_size) {
-    fprintf(stderr, "Error in file reading: number of grid elements read is different from the expected amount\n");
-    free(buffer); free(grid);
-    exit(-1);
-  }
+  /* Non-blank chars + Blank chars */
+  kern_row_chars = (kern_width * MAX_CHARS + kern_width) * sizeof(char);
 
   /* Kernel data from file */
+  buffer_size = kern_row_chars * kern_width;
+  buffer = malloc(buffer_size* sizeof(char));
   kernel = malloc(kern_size*sizeof(float));
-  offset = fread(buffer, sizeof(char), max_kern_chars, fp_kernel);
-  buffer[offset] = '\n';
+  fread(buffer, sizeof(char), buffer_size, fp_kernel);
   fclose(fp_kernel);
-  
+
   offset = 0;
-  for(i = 0; i < kern_size && offset < max_kern_chars; i++) {
+  for(i = 0; i < kern_size; i++) {
     kernel[i] = atof(&buffer[offset]);
-    while(buffer[offset] != ' ' && buffer[offset] != '\n') offset++;
-    while(buffer[offset] == ' ' || buffer[offset] == '\n') offset++;
+    while(buffer[offset] >= '+') offset++;
+    while(buffer[offset] != '\0' && buffer[offset] < '+') offset++;
   }
 
   if(i != kern_size) {
     fprintf(stderr, "Error in file reading: number of kernel elements read is different from the expected amount\n");
+    exit(-1);
+  }
+
+  free(buffer);
+}
+
+void read_data(FILE *fp_grid, int start, int assigned_rows) {
+  /* Non-blank chars + Blank chars */
+  int grid_row_chars = (grid_width * (MAX_CHARS-1) + grid_width) * sizeof(char);
+  int buffer_size = grid_row_chars * assigned_rows;
+  char* buffer;
+  int i, offset;
+
+  /* Grid data from file */
+  start = grid_row_chars * start;
+  if(start != 0 && fseek(fp_grid, start, SEEK_CUR)) {
+    fprintf(stderr, "Error while executing fseek\n");
+    exit(-1);
+  }
+  buffer = malloc(buffer_size * sizeof(char));
+  fread(buffer, sizeof(char), buffer_size, fp_grid);
+  fclose(fp_grid);
+
+  offset = 0;
+  grid = malloc(assigned_rows * grid_width * sizeof(float));
+  for(i = 0; i < assigned_rows * grid_width && offset < buffer_size; i++) { 
+    grid[i] = atof(&buffer[offset]);
+    while(buffer[offset] >= '+') offset++;
+    while(buffer[offset] != '\0' && buffer[offset] < '+') offset++;
+  }
+
+  if(i != assigned_rows * grid_width) {
+    fprintf(stderr, "Error in file reading: number of grid elements read is different from the expected amount\n");
     exit(-1);
   }
   free(buffer);

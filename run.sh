@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# = 0 ]; then
-    mpirun -np 1 ./conv 2    # Suggested only one iteration (./conv 1), two are used just for testing
+    mpirun -np 2 ./conv 2    # Suggested only one iteration (./conv 1), two are used just for testing
     exit 0
 fi
 

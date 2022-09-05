@@ -23,7 +23,7 @@ void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
 void init_read(FILE*, FILE*);
 void read_data(FILE*, int, int, int);
-void store_data(FILE*, int, int);
+void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
@@ -107,44 +107,46 @@ int main(int argc, char** argv) {
   
   /* First iteration - No rows exchange needed */
   conv_subgrid(old_grid, grid, pad_size, assigned_rows_size+pad_size);
-  return 0;
-  /* Second (or higher) iterations*/
 
-  /* Rows holded by this process and needed by another one */
-  float *upper = &grid[pad_size];
-  float *lower = &grid[assigned_rows_size];
-  /* Rows holded by other process and needed for this one */
+  /* Rows holded by this process and needed by another one 
+  float *upper = &old_grid[pad_size];
+  float *lower = &old_grid[assigned_rows_size];*/
+  /* Rows holded by other process and needed for this one 
   float *pad_row_upper = old_grid;
-  float *pad_row_lower = &old_grid[assigned_rows_size+pad_size];
+  float *pad_row_lower = &old_grid[assigned_rows_size+pad_size];*/
   
   if ((rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(rc, "Error in PAPI_start().");
 
-  for(uint8_t iters = 0; iters < num_iterations; iters++) {
+  /* Second (or higher) iterations */
+  float *temp;
+  for(uint8_t iters = 1; iters < num_iterations; iters++) {
+    /* Swap grid pointers */
+    temp = old_grid;
+    old_grid = grid;
+    grid = temp;
+
     if(num_procs > 1) {
       if (!rank) {
         /* Process with rank 0 doesn't have a "prev" process */
-        MPI_Isend(lower, pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[1]);
-        MPI_Irecv(pad_row_lower, pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, req);
+        MPI_Isend(&old_grid[assigned_rows_size], pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[1]);
+        MPI_Irecv(&old_grid[assigned_rows_size+pad_size], pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, req);
       } else if (rank == num_procs-1) {
         /* Last process doesn't have a "next" process */
-        MPI_Isend(upper, pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[1]);
-        MPI_Irecv(pad_row_upper, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
+        MPI_Isend(&old_grid[pad_size], pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[1]);
+        MPI_Irecv(old_grid, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
       } else {
         /* Every other process */
-        MPI_Isend(upper, pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[2]);
-        MPI_Irecv(pad_row_upper, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
-        MPI_Isend(lower, pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[3]);
-        MPI_Irecv(pad_row_lower, pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, &req[1]);
+        MPI_Isend(&old_grid[pad_size], pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[2]);
+        MPI_Irecv(old_grid, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
+        MPI_Isend(&old_grid[assigned_rows_size], pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[3]);
+        MPI_Irecv(&old_grid[assigned_rows_size+pad_size], pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, &req[1]);
       }  
     } 
 
-    //memcpy(&sub_grid[pad_size], &grid[grid_width * start], sizeof(float) * assigned_rows_size);
-    float* sub_grid = malloc(500);
     /* Start convolution only of central grid elements */
-    float *changed_subgrid = malloc(assigned_rows_size * sizeof(float));
-    conv_subgrid(sub_grid, changed_subgrid, grid_width*(num_pads << 1), (grid_width * (assigned_rows-num_pads)));
-
+    conv_subgrid(old_grid, grid, pad_size*2, assigned_rows_size);
+   
     /* Pad convolution */
     if(num_procs > 1) {
       if(!rank || rank == num_procs-1)
@@ -152,17 +154,17 @@ int main(int argc, char** argv) {
       else 
         MPI_Waitall(2, req, status);
     }
-    conv_subgrid(sub_grid, changed_subgrid, pad_size, (grid_width * (num_pads << 1)));
-    conv_subgrid(sub_grid, changed_subgrid, (grid_width * (assigned_rows-num_pads)), (grid_width * (assigned_rows+num_pads)));
-
-    if(rank != 0) {
-      MPI_Isend(changed_subgrid, assigned_rows_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
-    } else {
-      for(int k = 1; k < num_procs; k++) {
-        MPI_Irecv(&grid[grid_width * (grid_width / num_procs) * k], assigned_rows_size, MPI_FLOAT, k, 11, MPI_COMM_WORLD, &req[k-1]);
-      }
+    conv_subgrid(old_grid, grid, pad_size, pad_size*2);
+    conv_subgrid(old_grid, grid, assigned_rows_size, assigned_rows_size+pad_size);
+  }
+  
+  float *write_buffer = malloc(grid_size * sizeof(float) - grid_width * (grid_width / num_procs));
+  if(rank != 0) {
+    MPI_Isend(&grid[pad_size], assigned_rows_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
+  } else {
+    for(int k = 0; k < num_procs-1; k++) {
+      MPI_Irecv(&write_buffer[grid_width * (grid_width / num_procs) * k], assigned_rows_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, &req[k]);
     }
-    memcpy(&grid[grid_width*start], changed_subgrid, assigned_rows_size * sizeof(float));
   }
 
   /* Stop the count! */ 
@@ -177,9 +179,9 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Error while creating and/or opening result file\n");
       exit(-1);
     }
-    store_data(fp_result, start, assigned_rows_size);
+    store_data(fp_result, &grid[pad_size], assigned_rows_size);
     MPI_Waitall(num_procs-1, req, status);
-    store_data(fp_result, (end+1)*grid_width, grid_size);
+    store_data(fp_result, write_buffer, grid_size-assigned_rows_size);
     fclose(fp_result);
   }
 
@@ -233,8 +235,8 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
     }
 
     /* Convolution */
-    result = 0;
-    for (int iter=0, offset=0; iter < iterations; iter++) {
+    result = 0; offset = 0;
+    for (int iter=0; iter < iterations; iter++) {
       result += sub_grid[grid_index+offset] * kernel[kern_index+offset];
       matrix[kern_index+offset] = sub_grid[grid_index+offset];
       if (offset != kern_end-1) 
@@ -371,21 +373,17 @@ void read_data(FILE *fp_grid, int start, int assigned_rows, int rank) {
   free(buffer);
 }
 
-void store_data(FILE *fp_result, int start_position, int end_position){
-  /* Two multiplication for blank chars */
-  char* buffer = malloc((end_position-start_position+1) * 2 * MAX_CHARS * sizeof(char));
-  int col = start_position % grid_width;
-  int row = start_position - col;
+void store_data(FILE *fp_result, float *float_buffer, int count){
+  /* Buffer size: Num_floats * (Non-blank chars + Blank chars) */
+  char* buffer = malloc(count * (grid_width * MAX_CHARS + grid_width) * sizeof(char));
   int offset = 0;
-  
-  /* Buffer filling */
-  while(row + col < end_position) {
-    offset += sprintf(&buffer[offset], "%e ", grid[row+col]);
-    if (col != grid_width-1) 
-      col++;
-    else {
-      row += grid_width;
-      col = 0;
+  int limit = grid_width-1;
+
+  /* Write buffer filling */
+  for(int i = 0; i < count; i++){
+    offset += sprintf(&buffer[offset], "%e ", float_buffer[i]);
+    if (i == limit) {
+      limit += grid_width;
       offset += sprintf(&buffer[offset], "\n");
     }
   }

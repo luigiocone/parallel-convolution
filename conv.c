@@ -13,12 +13,13 @@
 #include <pthread.h>
 
 #define DEFAULT_ITERATIONS 1
+#define DEFAULT_THREADS 1
 #define GRID_FILE_PATH "./io-files/grid.txt"
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13     /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
-#define NUM_THREADS 1
 
+void* worker_thread(void*);
 void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
 void init_read(FILE*, FILE*);
@@ -26,13 +27,18 @@ void read_data(FILE*, int, int, int);
 void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 
+struct pthread_args {
+    int tid, start, end, num_threads;
+};
+pthread_barrier_t barrier;
+
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
 uint8_t kern_width;           /* Number of elements in one kernel matrix row */
 uint16_t grid_width;          /* Number of elements in one grid matrix row */
 uint64_t grid_size;           /* Number of elements in whole grid matrix */
 uint16_t kern_size;           /* Number of elements in whole kernel matrix */
 uint16_t pad_size;            /* Number of elements in the pad section of the grid matrix */
-int num_procs;                          /* Number of MPI processes in the communicator */
+int num_procs;                /* Number of MPI processes in the communicator */
 float kern_dot_sum;           /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
 float *kernel;                /* Kernel buffer */
 float *grid;                  /* Grid buffer */
@@ -41,18 +47,20 @@ float *old_grid;              /* Old grid buffer */
 
 int main(int argc, char** argv) {
   int rank;                               /* Current process identifier */
-  uint8_t num_iterations;                 /* How many times do the convolution operation */
-  int provided;
-  //pthread_t threads[NUM_THREADS];
+  int provided;                           /* MPI thread level supported */
   FILE *fp_grid, *fp_kernel;              /* I/O files for grid and kernel matrices */
   long_long time_start, time_stop;        /* To measure execution time */
   long_long num_cache_miss;               /* To measure number of cache misses */
   int event_set = PAPI_NULL;              /* Group of hardware events for PAPI library */
   int rc;                                 /* Return code used in error handling */
 
-  num_iterations = (argc == 2) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
+  /* How many times do the convolution operation and number of additional threads */
+  const uint8_t num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
+  const uint8_t num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
+  assert(num_iterations > 0 && num_threads > 0);
+  pthread_t threads[num_threads];
   
-  /* MPI Setup */
+  /* MPI setup */
   if((rc = MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided)) != MPI_SUCCESS) {
     fprintf(stderr, "MPI_Init error. Return code: %d\n", rc);
     exit(-1);
@@ -76,7 +84,7 @@ int main(int argc, char** argv) {
     handle_PAPI_error(rc, "Error while adding L2 total cache miss event.");
   if((rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(rc, "Error in PAPI_start().");
-  
+ 
   time_start = PAPI_get_real_usec();
 
   /* Opening input files in dir "./io-files" */
@@ -97,13 +105,13 @@ int main(int argc, char** argv) {
   }
 
   /* Data splitting */
-  int grid_height = (grid_width / num_procs);         /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
-  int start = grid_height * rank;                     /* Index of the first row for current process */
-  int end = grid_height - 1 + start;                  /* Index of the final row for current process */
-  int assigned_rows = end + 1 - start;                /* Number of rows assigned to current process */
-  int assigned_rows_size = assigned_rows*grid_width;  /* Number of elements assigned to current process */
-  uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
-  uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
+  const int grid_height = (grid_width / num_procs);         /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
+  const int start = grid_height * rank;                     /* Index of the first row for current process */
+  const int end = grid_height - 1 + start;                  /* Index of the final row for current process */
+  const int assigned_rows = end + 1 - start;                /* Number of rows assigned to current process */
+  const int assigned_rows_size = assigned_rows*grid_width;  /* Number of elements assigned to current process */
+  const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
+  const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
 
   /* Read grid data */
   grid = malloc((assigned_rows + num_pads*2) * grid_width * sizeof(float));
@@ -117,9 +125,33 @@ int main(int argc, char** argv) {
     memset(&old_grid[(assigned_rows+num_pads) * grid_width], 0, pad_size * sizeof(float));
   }
   read_data(fp_grid, start, assigned_rows, rank);
-  
+
+  /* Pthreads setup */
+  rc = pthread_barrier_init(&barrier, NULL, num_threads+1);
+  if (rc) { 
+    printf("Error while creating pthread barrier; Return code: %d\n", rc);
+    exit(-1);
+  }
+  struct pthread_args* args;
+  for(int i = 0; i < num_threads; i++) {
+    args = malloc(sizeof(struct pthread_args));
+    args->tid = i;        //(*args).tid = i
+    args->start = start;
+    args->end = end;
+    args->num_threads = num_threads;
+    rc = pthread_create(&threads[i], NULL, worker_thread, (void *)args);
+    if (rc) { 
+      printf("Error while creating pthread[%d]; Return code: %d\n", i, rc);
+      exit(-1);
+    }
+  }
+
   /* First iteration - No rows exchange needed */
-  conv_subgrid(old_grid, grid, pad_size, assigned_rows_size+pad_size);
+  int rows_per_thread = assigned_rows / (num_threads+1);
+  int my_start = pad_size;
+  int my_end = my_start + (rows_per_thread) * grid_width ;
+  conv_subgrid(old_grid, grid, my_start, my_end);
+  pthread_barrier_wait(&barrier);
 
   /* Second (or higher) iterations */
   float *temp;
@@ -150,7 +182,7 @@ int main(int argc, char** argv) {
     /* Start convolution only of central grid elements */
     conv_subgrid(old_grid, grid, pad_size*2, assigned_rows_size);
    
-    /* Pad convolution */
+    /* Convolution of top and bottom rows (the ones bordering pad rows) */
     if(num_procs > 1) {
       if(!rank || rank == num_procs-1)
         MPI_Wait(req, status);
@@ -202,6 +234,16 @@ int main(int argc, char** argv) {
   return 0;
 }
 
+void* worker_thread(void* args){
+  struct pthread_args *my_args = (struct pthread_args*)args;
+  int rows_per_thread = (my_args->end + 1 - my_args->start) / (my_args->num_threads+1);
+  int my_start = (my_args->tid+1) * grid_width * rows_per_thread + pad_size;
+  int my_end = my_start + (rows_per_thread) * grid_width;
+  
+  conv_subgrid(old_grid, grid, my_start, my_end);
+  pthread_barrier_wait(&barrier);
+  pthread_exit(NULL);
+}
 
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {
   float result;
@@ -319,8 +361,8 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
 }
 
 void read_data(FILE *fp_grid, int start, int assigned_rows, int rank) {
-  /* Non-blank chars + Blank chars */
-  int grid_row_chars = (grid_width * (MAX_CHARS-1) + grid_width) * sizeof(char);
+  /* Positive non-blank chars + Blank chars */
+  const int grid_row_chars = (grid_width * (MAX_CHARS-1) + grid_width) * sizeof(char);
   int offset = 0;
   int i = 0;
   int buffer_size = assigned_rows + num_pads;

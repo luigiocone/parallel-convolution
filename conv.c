@@ -13,7 +13,7 @@
 #include <pthread.h>
 
 #define DEFAULT_ITERATIONS 1
-#define DEFAULT_THREADS 1
+#define DEFAULT_THREADS 2
 #define GRID_FILE_PATH "./io-files/grid.txt"
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
@@ -28,7 +28,7 @@ void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 
 struct pthread_args {
-    int tid, start, end, num_threads;
+    int tid, start, rows_per_thread, num_iterations;
 };
 pthread_barrier_t barrier;
 
@@ -105,28 +105,26 @@ int main(int argc, char** argv) {
   }
 
   /* Data splitting */
-  const int grid_height = (grid_width / num_procs);         /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
-  const int start = grid_height * rank;                     /* Index of the first row for current process */
-  const int end = grid_height - 1 + start;                  /* Index of the final row for current process */
-  const int assigned_rows = end + 1 - start;                /* Number of rows assigned to current process */
-  const int assigned_rows_size = assigned_rows*grid_width;  /* Number of elements assigned to current process */
-  const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
-  const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
+  const int grid_height = (grid_width / num_procs);             /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
+  const int start = grid_height * rank;                         /* Index of the first row for current process */
+  const int end = grid_height - 1 + start;                      /* Index of the final row for current process */
+  const int rows_per_proc = end + 1 - start;                    /* Number of rows assigned to a process */
+  const int rows_per_thread = rows_per_proc / (num_threads+2);  /* Number of rows assigned to a thread */
 
   /* Read grid data */
-  grid = malloc((assigned_rows + num_pads*2) * grid_width * sizeof(float));
-  old_grid = malloc((assigned_rows + num_pads*2) * grid_width * sizeof(float));
+  grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
+  old_grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
   if(!rank){
     memset(grid, 0, pad_size * sizeof(float));
     memset(old_grid, 0, pad_size * sizeof(float));
   }
   else if(rank == num_procs-1){
-    memset(&grid[(assigned_rows+num_pads) * grid_width], 0, pad_size * sizeof(float));
-    memset(&old_grid[(assigned_rows+num_pads) * grid_width], 0, pad_size * sizeof(float));
+    memset(&grid[(rows_per_proc+num_pads) * grid_width], 0, pad_size * sizeof(float));
+    memset(&old_grid[(rows_per_proc+num_pads) * grid_width], 0, pad_size * sizeof(float));
   }
-  read_data(fp_grid, start, assigned_rows, rank);
+  read_data(fp_grid, start, rows_per_proc, rank);
 
-  /* Pthreads setup */
+  /* PThreads setup */
   rc = pthread_barrier_init(&barrier, NULL, num_threads+1);
   if (rc) { 
     printf("Error while creating pthread barrier; Return code: %d\n", rc);
@@ -135,10 +133,10 @@ int main(int argc, char** argv) {
   struct pthread_args* args;
   for(int i = 0; i < num_threads; i++) {
     args = malloc(sizeof(struct pthread_args));
-    args->tid = i;        //(*args).tid = i
+    args->tid = i;
     args->start = start;
-    args->end = end;
-    args->num_threads = num_threads;
+    args->rows_per_thread = rows_per_thread;
+    args->num_iterations = num_iterations;
     rc = pthread_create(&threads[i], NULL, worker_thread, (void *)args);
     if (rc) { 
       printf("Error while creating pthread[%d]; Return code: %d\n", i, rc);
@@ -147,40 +145,45 @@ int main(int argc, char** argv) {
   }
 
   /* First iteration - No rows exchange needed */
-  int rows_per_thread = assigned_rows / (num_threads+1);
-  int my_start = pad_size;
-  int my_end = my_start + (rows_per_thread) * grid_width ;
+  float *my_old_grid = old_grid;
+  float *my_grid = grid;
+  const int rows_per_proc_size = rows_per_proc*grid_width;  /* Number of elements assigned to a process */
+  const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
+  const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
+  
+  const int my_start = pad_size;
+  const int my_end = my_start + rows_per_thread * grid_width;
   conv_subgrid(old_grid, grid, my_start, my_end);
+  conv_subgrid(old_grid, grid, rows_per_proc_size-grid_width*(rows_per_thread-1), rows_per_proc_size+pad_size);
   pthread_barrier_wait(&barrier);
 
   /* Second (or higher) iterations */
   float *temp;
   for(uint8_t iters = 1; iters < num_iterations; iters++) {
     /* Swap grid pointers */
-    temp = old_grid;
-    old_grid = grid;
-    grid = temp;
-
+    temp = my_old_grid;
+    my_old_grid = my_grid;
+    my_grid = temp;
     if(num_procs > 1) {
       if (!rank) {
         /* Process with rank 0 doesn't have a "prev" process */
-        MPI_Isend(&old_grid[assigned_rows_size], pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[1]);
-        MPI_Irecv(&old_grid[assigned_rows_size+pad_size], pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, req);
+        MPI_Isend(&my_old_grid[rows_per_proc_size], pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[1]);
+        MPI_Irecv(&my_old_grid[rows_per_proc_size+pad_size], pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, req);
       } else if (rank == num_procs-1) {
         /* Last process doesn't have a "next" process */
-        MPI_Isend(&old_grid[pad_size], pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[1]);
-        MPI_Irecv(old_grid, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
+        MPI_Isend(&my_old_grid[pad_size], pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[1]);
+        MPI_Irecv(my_old_grid, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
       } else {
         /* Every other process */
-        MPI_Isend(&old_grid[pad_size], pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[2]);
-        MPI_Irecv(old_grid, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
-        MPI_Isend(&old_grid[assigned_rows_size], pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[3]);
-        MPI_Irecv(&old_grid[assigned_rows_size+pad_size], pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, &req[1]);
-      }  
-    } 
+        MPI_Isend(&my_old_grid[pad_size], pad_size, MPI_FLOAT, prev, 1, MPI_COMM_WORLD, &req[2]);
+        MPI_Irecv(my_old_grid, pad_size, MPI_FLOAT, prev, 0, MPI_COMM_WORLD, req);
+        MPI_Isend(&my_old_grid[rows_per_proc_size], pad_size, MPI_FLOAT, next, 0, MPI_COMM_WORLD, &req[3]);
+        MPI_Irecv(&my_old_grid[rows_per_proc_size+pad_size], pad_size, MPI_FLOAT, next, 1, MPI_COMM_WORLD, &req[1]);
+      }
+    }
 
     /* Start convolution only of central grid elements */
-    conv_subgrid(old_grid, grid, pad_size*2, assigned_rows_size);
+    conv_subgrid(my_old_grid, my_grid, pad_size*2, my_end);
    
     /* Convolution of top and bottom rows (the ones bordering pad rows) */
     if(num_procs > 1) {
@@ -189,16 +192,17 @@ int main(int argc, char** argv) {
       else 
         MPI_Waitall(2, req, status);
     }
-    conv_subgrid(old_grid, grid, pad_size, pad_size*2);
-    conv_subgrid(old_grid, grid, assigned_rows_size, assigned_rows_size+pad_size);
+    conv_subgrid(my_old_grid, my_grid, pad_size, pad_size*2);
+    conv_subgrid(my_old_grid, my_grid, rows_per_proc_size-grid_width*(rows_per_thread-1), rows_per_proc_size+pad_size);
+    pthread_barrier_wait(&barrier);
   }
   
   float *write_buffer = malloc(grid_size * sizeof(float) - grid_width * (grid_width / num_procs));
   if(rank != 0) {
-    MPI_Isend(&grid[pad_size], assigned_rows_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
+    MPI_Isend(&my_grid[pad_size], rows_per_proc_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
   } else {
     for(int k = 0; k < num_procs-1; k++) {
-      MPI_Irecv(&write_buffer[grid_width * (grid_width / num_procs) * k], assigned_rows_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, &req[k]);
+      MPI_Irecv(&write_buffer[grid_width * (grid_width / num_procs) * k], rows_per_proc_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, &req[k]);
     }
   }
 
@@ -214,9 +218,9 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Error while creating and/or opening result file\n");
       exit(-1);
     }
-    store_data(fp_result, &grid[pad_size], assigned_rows_size);
+    store_data(fp_result, &my_grid[pad_size], rows_per_proc_size);
     MPI_Waitall(num_procs-1, req, status);
-    store_data(fp_result, write_buffer, grid_size-assigned_rows_size);
+    store_data(fp_result, write_buffer, grid_size-rows_per_proc_size);
     fclose(fp_result);
   }
 
@@ -231,18 +235,25 @@ int main(int argc, char** argv) {
   free(grid);
   free(old_grid);
   free(kernel);
-  return 0;
+  pthread_exit(0);
 }
 
 void* worker_thread(void* args){
-  struct pthread_args *my_args = (struct pthread_args*)args;
-  int rows_per_thread = (my_args->end + 1 - my_args->start) / (my_args->num_threads+1);
-  int my_start = (my_args->tid+1) * grid_width * rows_per_thread + pad_size;
-  int my_end = my_start + (rows_per_thread) * grid_width;
-  
-  conv_subgrid(old_grid, grid, my_start, my_end);
-  pthread_barrier_wait(&barrier);
-  pthread_exit(NULL);
+  const struct pthread_args *my_args = (struct pthread_args*)args;
+  const int my_start = (my_args->tid+1) * grid_width * my_args->rows_per_thread + pad_size;
+  const int my_end = my_start + (my_args->rows_per_thread) * grid_width;
+
+  float *my_old_grid = old_grid;
+  float *my_grid = grid;
+  float *temp;
+  for(uint8_t iters = 0; iters < my_args->num_iterations; iters++) {
+    conv_subgrid(my_old_grid, my_grid, my_start, my_end);
+    temp = my_old_grid;
+    my_old_grid = my_grid;
+    my_grid = temp;
+    pthread_barrier_wait(&barrier);
+  }
+  pthread_exit(0);
 }
 
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {
@@ -360,13 +371,13 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
   free(buffer);
 }
 
-void read_data(FILE *fp_grid, int start, int assigned_rows, int rank) {
+void read_data(FILE *fp_grid, int start, int rows_per_proc, int rank) {
   /* Positive non-blank chars + Blank chars */
   const int grid_row_chars = (grid_width * (MAX_CHARS-1) + grid_width) * sizeof(char);
   int offset = 0;
   int i = 0;
-  int buffer_size = assigned_rows + num_pads;
-  int iterations = assigned_rows + num_pads*2;
+  int buffer_size = rows_per_proc + num_pads;
+  int iterations = rows_per_proc + num_pads*2;
   char* buffer;
 
   if(rank) {
@@ -374,7 +385,10 @@ void read_data(FILE *fp_grid, int start, int assigned_rows, int rank) {
     if(rank != num_procs-1) buffer_size += num_pads;
     else iterations -= num_pads;
   } 
-  else i = pad_size;
+  else {
+    i = pad_size;
+    if(num_procs == 1) iterations -= num_pads;
+  }
   
   start *= grid_row_chars;
   buffer_size *= grid_row_chars;

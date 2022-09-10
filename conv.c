@@ -11,6 +11,7 @@
 #include <papi.h>
 #include <mpi.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_THREADS 2
@@ -18,8 +19,10 @@
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13     /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
+#define ROWS_PER_JOB 8
 
 void* worker_thread(void*);
+void deposit_jobs(int, int, int);
 void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
 void init_read(FILE*, FILE*);
@@ -28,9 +31,11 @@ void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 
 struct pthread_args {
-    int tid, start, rows_per_thread, num_iterations;
+    int tid, rank;
 };
-pthread_barrier_t barrier;
+pthread_mutex_t mutex_job;
+pthread_cond_t not_full, not_empty;
+int front = 0, rear = 0, count = 0;
 
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
 uint8_t kern_width;           /* Number of elements in one kernel matrix row */
@@ -39,10 +44,13 @@ uint64_t grid_size;           /* Number of elements in whole grid matrix */
 uint16_t kern_size;           /* Number of elements in whole kernel matrix */
 uint16_t pad_size;            /* Number of elements in the pad section of the grid matrix */
 int num_procs;                /* Number of MPI processes in the communicator */
+int num_threads;              /* Number of threads for every MPI process */
+int num_iterations;           /* Number of convolution operations */
 float kern_dot_sum;           /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
 float *kernel;                /* Kernel buffer */
 float *grid;                  /* Grid buffer */
 float *old_grid;              /* Old grid buffer */
+int *jobs_buffer;
 
 
 int main(int argc, char** argv) {
@@ -55,8 +63,8 @@ int main(int argc, char** argv) {
   int rc;                                 /* Return code used in error handling */
 
   /* How many times do the convolution operation and number of additional threads */
-  const uint8_t num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
-  const uint8_t num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
+  num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
+  num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
   assert(num_iterations > 0 && num_threads > 0);
   pthread_t threads[num_threads];
   
@@ -109,7 +117,7 @@ int main(int argc, char** argv) {
   const int start = grid_height * rank;                         /* Index of the first row for current process */
   const int end = grid_height - 1 + start;                      /* Index of the final row for current process */
   const int rows_per_proc = end + 1 - start;                    /* Number of rows assigned to a process */
-  const int rows_per_thread = rows_per_proc / (num_threads+2);  /* Number of rows assigned to a thread */
+  //const int rows_per_thread = rows_per_proc / (num_threads);    /* Number of rows assigned to a thread */
 
   /* Read grid data */
   grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
@@ -124,19 +132,20 @@ int main(int argc, char** argv) {
   }
   read_data(fp_grid, start, rows_per_proc, rank);
 
+
   /* PThreads setup */
-  rc = pthread_barrier_init(&barrier, NULL, num_threads+1);
+  rc = pthread_mutex_init(&mutex_job, NULL);
+  rc |= pthread_cond_init(&not_full, NULL);
+  rc |= pthread_cond_init(&not_empty, NULL);
   if (rc) { 
-    printf("Error while creating pthread barrier; Return code: %d\n", rc);
+    printf("PThread elements init error");
     exit(-1);
   }
   struct pthread_args* args;
   for(int i = 0; i < num_threads; i++) {
     args = malloc(sizeof(struct pthread_args));
     args->tid = i;
-    args->start = start;
-    args->rows_per_thread = rows_per_thread;
-    args->num_iterations = num_iterations;
+    args->rank = rank;
     rc = pthread_create(&threads[i], NULL, worker_thread, (void *)args);
     if (rc) { 
       printf("Error while creating pthread[%d]; Return code: %d\n", i, rc);
@@ -151,11 +160,28 @@ int main(int argc, char** argv) {
   const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
   const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
   
-  const int my_start = pad_size;
-  const int my_end = my_start + rows_per_thread * grid_width;
-  conv_subgrid(old_grid, grid, my_start, my_end);
-  conv_subgrid(old_grid, grid, rows_per_proc_size-grid_width*(rows_per_thread-1), rows_per_proc_size+pad_size);
-  pthread_barrier_wait(&barrier);
+  //int total_jobs = grid_width / ROWS_PER_JOB;
+  int cur_job = num_threads *ROWS_PER_JOB* grid_width + pad_size;
+  
+  /* First jobs: rows bordering pads */
+  pthread_mutex_lock(&mutex_job);
+  while(count > num_threads-2) {
+    pthread_cond_wait(&not_full, &mutex_job);
+  }
+  jobs_buffer[rear] = cur_job;
+  jobs_buffer[rear+1] = cur_job + ROWS_PER_JOB * grid_width;
+  jobs_buffer[rear+2] = 0;
+  rear = (rear+3) % (num_threads*3);
+  jobs_buffer[rear] = rows_per_proc_size;
+  jobs_buffer[rear+1] = rows_per_proc_size+pad_size;
+  jobs_buffer[rear+2] = 0;
+  rear = (rear+3) % (num_threads*3);
+  count+=2;
+  cur_job += ROWS_PER_JOB * grid_width;
+  pthread_cond_signal(&not_empty);
+  pthread_mutex_unlock(&mutex_job);
+  /* Deposit all remaining jobs */
+  deposit_jobs(cur_job, rows_per_proc_size, 0);
 
   /* Second (or higher) iterations */
   float *temp;
@@ -164,6 +190,9 @@ int main(int argc, char** argv) {
     temp = my_old_grid;
     my_old_grid = my_grid;
     my_grid = temp;
+
+    /* To Do sync */
+
     if(num_procs > 1) {
       if (!rank) {
         /* Process with rank 0 doesn't have a "prev" process */
@@ -183,20 +212,49 @@ int main(int argc, char** argv) {
     }
 
     /* Start convolution only of central grid elements */
-    conv_subgrid(my_old_grid, my_grid, pad_size*2, my_end);
-   
+    deposit_jobs(pad_size*2, rows_per_proc_size, iters);
+
     /* Convolution of top and bottom rows (the ones bordering pad rows) */
     if(num_procs > 1) {
       if(!rank || rank == num_procs-1)
-        MPI_Wait(req, status);
+        rc = MPI_Wait(req, status);
       else 
-        MPI_Waitall(2, req, status);
+        rc = MPI_Waitall(2, req, status);
     }
-    conv_subgrid(my_old_grid, my_grid, pad_size, pad_size*2);
-    conv_subgrid(my_old_grid, my_grid, rows_per_proc_size-grid_width*(rows_per_thread-1), rows_per_proc_size+pad_size);
-    pthread_barrier_wait(&barrier);
+
+    /* Deposit jobs for pad convolution */
+    pthread_mutex_lock(&mutex_job);
+    while(count > num_threads-2) {
+      pthread_cond_wait(&not_full, &mutex_job);
+    }
+    jobs_buffer[rear] = pad_size;
+    jobs_buffer[rear+1] = pad_size *2;
+    jobs_buffer[rear+2] = iters;
+    rear = (rear+3) % (num_threads*3);
+    jobs_buffer[rear] = rows_per_proc_size;
+    jobs_buffer[rear+1] = rows_per_proc_size + pad_size;
+    jobs_buffer[rear+2] = iters;
+    rear = (rear+3) % (num_threads*3);
+    count+=2;
+    pthread_cond_signal(&not_empty);
+    pthread_mutex_unlock(&mutex_job);
   }
-  
+
+  /* Deposit jobs for termination */
+  for(int i = 0; i < num_threads; i++) {
+    pthread_mutex_lock(&mutex_job);
+    while(count == num_threads) {
+      pthread_cond_wait(&not_full, &mutex_job);
+    }
+    jobs_buffer[rear] = -1;
+    jobs_buffer[rear+1] = -1;
+    jobs_buffer[rear+2] = num_iterations;
+    rear = (rear+3) % (num_threads*3);
+    count++;
+    pthread_cond_signal(&not_empty);
+    pthread_mutex_unlock(&mutex_job);
+  }
+
   float *write_buffer = malloc(grid_size * sizeof(float) - grid_width * (grid_width / num_procs));
   if(rank != 0) {
     MPI_Isend(&my_grid[pad_size], rows_per_proc_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
@@ -238,22 +296,60 @@ int main(int argc, char** argv) {
   pthread_exit(0);
 }
 
+void deposit_jobs(int cur_job, int jobs, int iter){
+  while(cur_job < jobs) {
+    pthread_mutex_lock(&mutex_job);
+    while(count == num_threads) {
+      pthread_cond_wait(&not_full, &mutex_job);
+    }
+    while(count != num_threads && cur_job < jobs) {
+      jobs_buffer[rear] = cur_job;
+      jobs_buffer[rear+1] = cur_job + ROWS_PER_JOB * grid_width;
+      jobs_buffer[rear+2] = iter;
+      rear = (rear+3) % (num_threads*3);
+      count++;
+      cur_job += ROWS_PER_JOB * grid_width;
+    }
+    pthread_cond_signal(&not_empty);
+    pthread_mutex_unlock(&mutex_job);
+  }
+}
+
 void* worker_thread(void* args){
   const struct pthread_args *my_args = (struct pthread_args*)args;
-  const int my_start = (my_args->tid+1) * grid_width * my_args->rows_per_thread + pad_size;
-  const int my_end = my_start + (my_args->rows_per_thread) * grid_width;
+  int start = pad_size + my_args->tid * ROWS_PER_JOB * grid_width;
+  int end = start + ROWS_PER_JOB * grid_width;
+  int iteration = 0;
 
   float *my_old_grid = old_grid;
   float *my_grid = grid;
   float *temp;
-  for(uint8_t iters = 0; iters < my_args->num_iterations; iters++) {
-    conv_subgrid(my_old_grid, my_grid, my_start, my_end);
-    temp = my_old_grid;
-    my_old_grid = my_grid;
-    my_grid = temp;
-    pthread_barrier_wait(&barrier);
+  conv_subgrid(my_old_grid, my_grid, start, end);
+  
+  while(1) {
+    pthread_mutex_lock(&mutex_job);
+    while(count == 0) {
+      pthread_cond_wait(&not_empty, &mutex_job);
+    }
+    start = jobs_buffer[front];
+    end = jobs_buffer[front+1];
+    if(jobs_buffer[front+2] != iteration){
+      if(jobs_buffer[front+2] == num_iterations) {
+        printf("thread %d exit\n", my_args->tid);
+        pthread_mutex_unlock(&mutex_job);
+        pthread_exit(0);
+      }
+      iteration = jobs_buffer[front+2];
+      temp = my_old_grid;
+      my_old_grid = my_grid;
+      my_grid = temp;
+    }
+    front = (front+3) % (num_threads*3);
+    count--;
+    pthread_cond_signal(&not_full);
+    pthread_mutex_unlock(&mutex_job);
+    conv_subgrid(my_old_grid, my_grid, start, end);
   }
-  pthread_exit(0);
 }
 
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {
@@ -368,6 +464,8 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
     exit(-1);
   }
 
+  /* Jobs buffer */
+  jobs_buffer = malloc(sizeof(int) * 3 * num_threads);
   free(buffer);
 }
 

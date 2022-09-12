@@ -22,7 +22,7 @@
 #define ROWS_PER_JOB 8
 
 void* worker_thread(void*);
-void deposit_jobs(int, int, int);
+void deposit_jobs(int, int, int, float*, float*);
 void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
 void init_read(FILE*, FILE*);
@@ -30,37 +30,49 @@ void read_data(FILE*, int, int, int);
 void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 
-struct pthread_args {
-    int tid, rank;
+struct job {
+    int start, end, iter;
 };
-pthread_mutex_t mutex_job;
-pthread_cond_t not_full, not_empty;
+
+struct pthread_args {
+    int tid;
+    //int rank;
+};
+pthread_mutex_t mutex_job = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex_log = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t pad_done = PTHREAD_COND_INITIALIZER;
+pthread_cond_t not_full = PTHREAD_COND_INITIALIZER;
+pthread_cond_t not_empty = PTHREAD_COND_INITIALIZER;
 int front = 0, rear = 0, count = 0;
 
+struct job *jobs;             /* Queue of jobs */
+uint64_t* iteration_log;      /* 64 bit map of completed job (in a current iteration) */
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
 uint8_t kern_width;           /* Number of elements in one kernel matrix row */
 uint16_t grid_width;          /* Number of elements in one grid matrix row */
 uint64_t grid_size;           /* Number of elements in whole grid matrix */
 uint16_t kern_size;           /* Number of elements in whole kernel matrix */
 uint16_t pad_size;            /* Number of elements in the pad section of the grid matrix */
+int job_size;                 /* Number of elements in a job */
+int last_job;                 /* Row index of last job (bordering bottom pads) */
 int num_procs;                /* Number of MPI processes in the communicator */
 int num_threads;              /* Number of threads for every MPI process */
 int num_iterations;           /* Number of convolution operations */
+int num_jobs;                 /* Number of jobs storable in a shared buffer */
 float kern_dot_sum;           /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
 float *kernel;                /* Kernel buffer */
 float *grid;                  /* Grid buffer */
 float *old_grid;              /* Old grid buffer */
-int *jobs_buffer;
 
 
 int main(int argc, char** argv) {
   int rank;                               /* Current process identifier */
   int provided;                           /* MPI thread level supported */
-  FILE *fp_grid, *fp_kernel;              /* I/O files for grid and kernel matrices */
+  int rc;                                 /* Return code used in error handling */
+  int event_set = PAPI_NULL;              /* Group of hardware events for PAPI library */
   long_long time_start, time_stop;        /* To measure execution time */
   long_long num_cache_miss;               /* To measure number of cache misses */
-  int event_set = PAPI_NULL;              /* Group of hardware events for PAPI library */
-  int rc;                                 /* Return code used in error handling */
+  FILE *fp_grid, *fp_kernel;              /* I/O files for grid and kernel matrices */
 
   /* How many times do the convolution operation and number of additional threads */
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
@@ -92,8 +104,6 @@ int main(int argc, char** argv) {
     handle_PAPI_error(rc, "Error while adding L2 total cache miss event.");
   if((rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(rc, "Error in PAPI_start().");
- 
-  time_start = PAPI_get_real_usec();
 
   /* Opening input files in dir "./io-files" */
   if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
@@ -106,18 +116,23 @@ int main(int argc, char** argv) {
   }
   init_read(fp_grid, fp_kernel);
   assert(grid_width % num_procs == 0);
+  assert(ROWS_PER_JOB > num_pads);
 
   /* Computation of sum(dot(kernel, kernel)) */
   for(int pos = 0; pos < kern_size; pos++){
     kern_dot_sum += kernel[pos] * kernel[pos];
   }
 
-  /* Data splitting */
+  /* Data splitting and variable initialization */
   const int grid_height = (grid_width / num_procs);             /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
   const int start = grid_height * rank;                         /* Index of the first row for current process */
   const int end = grid_height - 1 + start;                      /* Index of the final row for current process */
   const int rows_per_proc = end + 1 - start;                    /* Number of rows assigned to a process */
-  //const int rows_per_thread = rows_per_proc / (num_threads);    /* Number of rows assigned to a thread */
+  const int rows_per_proc_size = rows_per_proc*grid_width;      /* Number of elements assigned to a process */
+  const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;      /* Rank of process having rows next to this process */
+  const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;      /* Rank of process having rows prev to this process */
+  const int total_jobs = (grid_width / num_procs) / ROWS_PER_JOB;
+  iteration_log = calloc(sizeof(uint64_t), (total_jobs / 64)+1);
 
   /* Read grid data */
   grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
@@ -132,66 +147,59 @@ int main(int argc, char** argv) {
   }
   read_data(fp_grid, start, rows_per_proc, rank);
 
+  /* First iteration - No rows exchange needed */
+  time_start = PAPI_get_real_usec();
+  float *my_old_grid = old_grid;
+  float *my_grid = grid;
+  float *temp;
 
-  /* PThreads setup */
-  rc = pthread_mutex_init(&mutex_job, NULL);
-  rc |= pthread_cond_init(&not_full, NULL);
-  rc |= pthread_cond_init(&not_empty, NULL);
-  if (rc) { 
-    printf("PThread elements init error");
-    exit(-1);
-  }
-  struct pthread_args* args;
+  /* PThreads creation */
+  struct pthread_args* args = malloc(sizeof(struct pthread_args) * num_threads);
   for(int i = 0; i < num_threads; i++) {
-    args = malloc(sizeof(struct pthread_args));
-    args->tid = i;
-    args->rank = rank;
-    rc = pthread_create(&threads[i], NULL, worker_thread, (void *)args);
+    args[i].tid = i;
+    //args[i].rank = rank;
+    rc = pthread_create(&threads[i], NULL, worker_thread, (void *)&args[i]);
     if (rc) { 
-      printf("Error while creating pthread[%d]; Return code: %d\n", i, rc);
+      fprintf(stderr, "Error while creating pthread[%d]; Return code: %d\n", i, rc);
       exit(-1);
     }
   }
 
-  /* First iteration - No rows exchange needed */
-  float *my_old_grid = old_grid;
-  float *my_grid = grid;
-  const int rows_per_proc_size = rows_per_proc*grid_width;  /* Number of elements assigned to a process */
-  const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;
-  const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;
-  
-  //int total_jobs = grid_width / ROWS_PER_JOB;
-  int cur_job = num_threads *ROWS_PER_JOB* grid_width + pad_size;
-  
-  /* First jobs: rows bordering pads */
+  /* Insert high priority job first (the bottom rows bordering pads) */
+  last_job = (grid_height + num_pads - ROWS_PER_JOB) * grid_width;
   pthread_mutex_lock(&mutex_job);
-  while(count > num_threads-2) {
+  while(count == num_jobs) {
     pthread_cond_wait(&not_full, &mutex_job);
   }
-  jobs_buffer[rear] = cur_job;
-  jobs_buffer[rear+1] = cur_job + ROWS_PER_JOB * grid_width;
-  jobs_buffer[rear+2] = 0;
-  rear = (rear+3) % (num_threads*3);
-  jobs_buffer[rear] = rows_per_proc_size;
-  jobs_buffer[rear+1] = rows_per_proc_size+pad_size;
-  jobs_buffer[rear+2] = 0;
-  rear = (rear+3) % (num_threads*3);
-  count+=2;
-  cur_job += ROWS_PER_JOB * grid_width;
+  jobs[rear].start = last_job;
+  jobs[rear].end = rows_per_proc_size+pad_size;
+  jobs[rear].iter = 0;
+  rear = (rear+1) % num_jobs;
+  count++;
   pthread_cond_signal(&not_empty);
   pthread_mutex_unlock(&mutex_job);
-  /* Deposit all remaining jobs */
-  deposit_jobs(cur_job, rows_per_proc_size, 0);
+  
+  /* Deposit all remaining jobs (index after initial thread creation job) */
+  deposit_jobs(pad_size + num_threads * job_size, last_job, 0, my_old_grid, my_grid);
+  /*int shift = (total_jobs-1) % 64;
+  int arr_index = (total_jobs-1) / 64;
+  uint64_t mask = (uint64_t) 1 << shift;*/
+  
+  uint64_t end_mask = UINT64_MAX >> (64 - total_jobs);
+  pthread_mutex_lock(&mutex_log);
+  //while( !(iteration_log[0] & 1)  || !(iteration_log[arr_index] & mask)) {
+  while(iteration_log[0] != end_mask) {
+    pthread_cond_wait(&pad_done, &mutex_log);
+  }
+  memset(iteration_log, 0, sizeof(uint64_t)*total_jobs/64);
+  pthread_mutex_unlock(&mutex_log);
 
   /* Second (or higher) iterations */
-  float *temp;
   for(uint8_t iters = 1; iters < num_iterations; iters++) {
     /* Swap grid pointers */
     temp = my_old_grid;
     my_old_grid = my_grid;
     my_grid = temp;
-
-    /* To Do sync */
 
     if(num_procs > 1) {
       if (!rank) {
@@ -212,7 +220,8 @@ int main(int argc, char** argv) {
     }
 
     /* Start convolution only of central grid elements */
-    deposit_jobs(pad_size*2, rows_per_proc_size, iters);
+    int curr_job = pad_size + job_size;
+    deposit_jobs(curr_job, last_job, iters, my_old_grid, my_grid);
 
     /* Convolution of top and bottom rows (the ones bordering pad rows) */
     if(num_procs > 1) {
@@ -224,35 +233,48 @@ int main(int argc, char** argv) {
 
     /* Deposit jobs for pad convolution */
     pthread_mutex_lock(&mutex_job);
-    while(count > num_threads-2) {
+    while(count > num_jobs-2) {
       pthread_cond_wait(&not_full, &mutex_job);
     }
-    jobs_buffer[rear] = pad_size;
-    jobs_buffer[rear+1] = pad_size *2;
-    jobs_buffer[rear+2] = iters;
-    rear = (rear+3) % (num_threads*3);
-    jobs_buffer[rear] = rows_per_proc_size;
-    jobs_buffer[rear+1] = rows_per_proc_size + pad_size;
-    jobs_buffer[rear+2] = iters;
-    rear = (rear+3) % (num_threads*3);
+    jobs[rear].start = pad_size;
+    jobs[rear].end = pad_size + job_size;
+    jobs[rear].iter = iters;
+    rear = (rear+1) % num_jobs;
+    jobs[rear].start = last_job;
+    jobs[rear].end = rows_per_proc_size + pad_size;
+    jobs[rear].iter = iters;
+    rear = (rear+1) % num_jobs;
     count+=2;
     pthread_cond_signal(&not_empty);
     pthread_mutex_unlock(&mutex_job);
+
+    /* Wait */
+    pthread_mutex_lock(&mutex_log);
+    //while( !(iteration_log[0] & 1)  || !(iteration_log[arr_index] & mask)) {
+    while(iteration_log[0] != end_mask) {
+      pthread_cond_wait(&pad_done, &mutex_log);
+    }
+    memset(iteration_log, 0, sizeof(uint64_t)*total_jobs/64+1);
+    pthread_mutex_unlock(&mutex_log);
   }
 
   /* Deposit jobs for termination */
   for(int i = 0; i < num_threads; i++) {
     pthread_mutex_lock(&mutex_job);
-    while(count == num_threads) {
+    while(count == num_jobs) {
       pthread_cond_wait(&not_full, &mutex_job);
     }
-    jobs_buffer[rear] = -1;
-    jobs_buffer[rear+1] = -1;
-    jobs_buffer[rear+2] = num_iterations;
-    rear = (rear+3) % (num_threads*3);
+    jobs[rear].iter = num_iterations;
+    rear = (rear+1) % num_jobs;
     count++;
     pthread_cond_signal(&not_empty);
     pthread_mutex_unlock(&mutex_job);
+  }
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  if(!rank) {
+    time_stop = PAPI_get_real_usec();
+    printf("(PAPI) Elapsed time: %lld us\n", (time_stop - time_start));
   }
 
   float *write_buffer = malloc(grid_size * sizeof(float) - grid_width * (grid_width / num_procs));
@@ -281,34 +303,40 @@ int main(int argc, char** argv) {
     store_data(fp_result, write_buffer, grid_size-rows_per_proc_size);
     fclose(fp_result);
   }
-
-  MPI_Barrier(MPI_COMM_WORLD);
-  if(!rank) {
-    time_stop = PAPI_get_real_usec();
-    printf("(PAPI) Elapsed time: %lld us\n", (time_stop - time_start));
-  }
   
   MPI_Finalize();
   free(write_buffer);
+  free(iteration_log);
+  free(args);
+  free(jobs);
   free(grid);
   free(old_grid);
   free(kernel);
   pthread_exit(0);
 }
 
-void deposit_jobs(int cur_job, int jobs, int iter){
-  while(cur_job < jobs) {
+void deposit_jobs(int curr_job, int end_job, int iter, float *my_old_grid, float *my_grid){
+  int temp;
+  while(curr_job < end_job) {
     pthread_mutex_lock(&mutex_job);
-    while(count == num_threads) {
-      pthread_cond_wait(&not_full, &mutex_job);
+    while(count == num_jobs) {
+      /* Manager does some work if buffer is full */
+      if(curr_job < end_job) {
+        pthread_mutex_unlock(&mutex_job);
+        temp = curr_job;
+        curr_job += job_size;
+        conv_subgrid(my_old_grid, my_grid, temp, curr_job);
+        pthread_mutex_lock(&mutex_job);
+      } else
+        pthread_cond_wait(&not_full, &mutex_job);
     }
-    while(count != num_threads && cur_job < jobs) {
-      jobs_buffer[rear] = cur_job;
-      jobs_buffer[rear+1] = cur_job + ROWS_PER_JOB * grid_width;
-      jobs_buffer[rear+2] = iter;
-      rear = (rear+3) % (num_threads*3);
+    while(count != num_jobs && curr_job < end_job) {
+      jobs[rear].start = curr_job;
+      jobs[rear].end = curr_job + job_size;
+      jobs[rear].iter = iter;
+      rear = (rear+1) % num_jobs;
       count++;
-      cur_job += ROWS_PER_JOB * grid_width;
+      curr_job += job_size;
     }
     pthread_cond_signal(&not_empty);
     pthread_mutex_unlock(&mutex_job);
@@ -316,40 +344,62 @@ void deposit_jobs(int cur_job, int jobs, int iter){
 }
 
 void* worker_thread(void* args){
-  const struct pthread_args *my_args = (struct pthread_args*)args;
-  int start = pad_size + my_args->tid * ROWS_PER_JOB * grid_width;
-  int end = start + ROWS_PER_JOB * grid_width;
-  int iteration = 0;
-
+  struct pthread_args *my_args = (struct pthread_args*)args;
+  int start = pad_size + my_args->tid * job_size;
+  int end = start + job_size;
+  int iteration = 0, temp_iter;
   float *my_old_grid = old_grid;
   float *my_grid = grid;
   float *temp;
+  long_long time_start, time_stop;
+  long_long total_wait_time = 0;
+
+  /* All threads starts with an initial job after creation */
   conv_subgrid(my_old_grid, my_grid, start, end);
-  
   while(1) {
+    time_start = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_job);
     while(count == 0) {
       pthread_cond_wait(&not_empty, &mutex_job);
     }
-    start = jobs_buffer[front];
-    end = jobs_buffer[front+1];
-    if(jobs_buffer[front+2] != iteration){
-      if(jobs_buffer[front+2] == num_iterations) {
-        printf("thread %d exit\n", my_args->tid);
-        pthread_mutex_unlock(&mutex_job);
+    time_stop = PAPI_get_real_usec();
+
+    /* Fetching a job from jobs queue */
+    start = jobs[front].start;
+    end = jobs[front].end;
+    temp_iter = jobs[front].iter;
+    front = (front+1) % num_jobs;
+    count--;
+    pthread_cond_signal(&not_full);
+    pthread_mutex_unlock(&mutex_job);
+    total_wait_time += time_stop - time_start;
+    
+    /* Check current iteration */
+    if(temp_iter != iteration){
+      if(temp_iter == num_iterations) {
+        printf("Thread[%d]: Job queue waiting time: %llu us\n", my_args->tid, total_wait_time);
         pthread_exit(0);
       }
-      iteration = jobs_buffer[front+2];
+      iteration = temp_iter;
       temp = my_old_grid;
       my_old_grid = my_grid;
       my_grid = temp;
     }
-    front = (front+3) % (num_threads*3);
-    count--;
-    pthread_cond_signal(&not_full);
-    pthread_mutex_unlock(&mutex_job);
+
+    /* Job computing */
     conv_subgrid(my_old_grid, my_grid, start, end);
   }
+}
+
+void log_job(int start){
+  int job_num = (start-pad_size) / job_size;
+  int shift = job_num % 64;
+  int arr_index = job_num / 64;
+  pthread_mutex_lock(&mutex_log);
+  iteration_log[arr_index] |= (uint64_t) 1 << shift;
+  //if(start == pad_size || start == last_job) {
+  pthread_cond_signal(&pad_done);
+  pthread_mutex_unlock(&mutex_log);
 }
 
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {
@@ -412,6 +462,7 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       col = 0;
     }
   }
+  log_job(start_index);
 }
 
 float normalize(float conv_res, float *matrix) {
@@ -438,10 +489,11 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
     fprintf(stderr, "Error in file reading: first element should be the row (or column) length of a square matrix\n");
     exit(-1);
   }
-  grid_size = grid_width*grid_width;
-  kern_size = kern_width*kern_width;
-  num_pads = (kern_width - 1) >> 1;
+  grid_size = grid_width * grid_width;
+  kern_size = kern_width * kern_width;
+  num_pads = (kern_width - 1) / 2;
   pad_size = grid_width * num_pads;
+  job_size = grid_width * ROWS_PER_JOB;
   
   /* Non-blank chars + Blank chars */
   kern_row_chars = (kern_width * MAX_CHARS + kern_width) * sizeof(char);
@@ -465,7 +517,8 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
   }
 
   /* Jobs buffer */
-  jobs_buffer = malloc(sizeof(int) * 3 * num_threads);
+  num_jobs = num_threads * 2;
+  jobs = malloc(sizeof(struct job) * num_jobs);
   free(buffer);
 }
 

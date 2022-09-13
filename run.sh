@@ -10,7 +10,7 @@ WORKSPACE="/home/ocone/convolution"
 
 case $1 in
   hpc)       # Cluster only
-    mpirun --mca btl self,openib -np 64 -machinefile mf ./conv 2
+    mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 2 16
     ;;
 
   connect)   # Connect to cluster
@@ -28,6 +28,10 @@ case $1 in
 
   receive)   # Transfer .clog2 file from cluster to local machine
     scp -P 22001 $CLUSTER_UNISANNIO:$WORKSPACE/conv.clog2 ./
+    ;;
+  
+  valgrind)
+    valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose --log-file=valgrind-out.txt mpirun -np 2 ./conv 2
     ;;
   
   createlog) # Create a .clog2 file. Java commands must be executed on local machine 

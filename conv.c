@@ -20,8 +20,10 @@
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13     /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
 #define ROWS_PER_JOB 8
+#define INT_NUM_BITS 8 * sizeof(int)
 
 void* worker_thread(void*);
+void wait_iteration_end(int);
 void deposit_jobs(int, int, int, float*, float*);
 void conv_subgrid(float*, float*, int, int);
 float normalize(float, float*);
@@ -46,7 +48,7 @@ pthread_cond_t not_empty = PTHREAD_COND_INITIALIZER;
 int front = 0, rear = 0, count = 0;
 
 struct job *jobs;             /* Queue of jobs */
-uint64_t* iteration_log;      /* 64 bit map of completed job (in a current iteration) */
+unsigned int* iteration_log;           /* Bit map of completed job during an iteration */
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
 uint8_t kern_width;           /* Number of elements in one kernel matrix row */
 uint16_t grid_width;          /* Number of elements in one grid matrix row */
@@ -132,7 +134,8 @@ int main(int argc, char** argv) {
   const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;      /* Rank of process having rows next to this process */
   const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;      /* Rank of process having rows prev to this process */
   const int total_jobs = (grid_width / num_procs) / ROWS_PER_JOB;
-  iteration_log = calloc(sizeof(uint64_t), (total_jobs / 64)+1);
+  const int log_buff_size = (total_jobs + INT_NUM_BITS-1) / INT_NUM_BITS;
+  iteration_log = calloc(sizeof(int), log_buff_size);
 
   /* Read grid data */
   grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
@@ -181,18 +184,7 @@ int main(int argc, char** argv) {
   
   /* Deposit all remaining jobs (index after initial thread creation job) */
   deposit_jobs(pad_size + num_threads * job_size, last_job, 0, my_old_grid, my_grid);
-  /*int shift = (total_jobs-1) % 64;
-  int arr_index = (total_jobs-1) / 64;
-  uint64_t mask = (uint64_t) 1 << shift;*/
-  
-  uint64_t end_mask = UINT64_MAX >> (64 - total_jobs);
-  pthread_mutex_lock(&mutex_log);
-  //while( !(iteration_log[0] & 1)  || !(iteration_log[arr_index] & mask)) {
-  while(iteration_log[0] != end_mask) {
-    pthread_cond_wait(&pad_done, &mutex_log);
-  }
-  memset(iteration_log, 0, sizeof(uint64_t)*total_jobs/64);
-  pthread_mutex_unlock(&mutex_log);
+  wait_iteration_end(total_jobs);
 
   /* Second (or higher) iterations */
   for(uint8_t iters = 1; iters < num_iterations; iters++) {
@@ -248,13 +240,8 @@ int main(int argc, char** argv) {
     pthread_cond_signal(&not_empty);
     pthread_mutex_unlock(&mutex_job);
 
-    /* Wait */
-    pthread_mutex_lock(&mutex_log);
-    //while( !(iteration_log[0] & 1)  || !(iteration_log[arr_index] & mask)) {
-    while(iteration_log[0] != end_mask) {
-      pthread_cond_wait(&pad_done, &mutex_log);
-    }
-    memset(iteration_log, 0, sizeof(uint64_t)*total_jobs/64+1);
+    wait_iteration_end(total_jobs);
+    memset(iteration_log, 0, sizeof(int) * log_buff_size);
     pthread_mutex_unlock(&mutex_log);
   }
 
@@ -343,6 +330,31 @@ void deposit_jobs(int curr_job, int end_job, int iter, float *my_old_grid, float
   }
 }
 
+void wait_iteration_end(int total_jobs){
+  const unsigned int last_mask = UINT_MAX >> (INT_NUM_BITS - (total_jobs % (INT_NUM_BITS)));
+  const unsigned int log_buff_size = (total_jobs + INT_NUM_BITS-1) / (INT_NUM_BITS);
+
+  /*int shift = (total_jobs-1) % 32;
+  int arr_index = (total_jobs-1) / 32;
+  int mask = 1 << shift;*/
+  //while( !(iteration_log[0] & 1)  || !(iteration_log[arr_index] & mask)) {
+
+  pthread_mutex_lock(&mutex_log);
+  int busy = 0;
+  int done = 0;
+  while(!done) {
+    busy = 0;
+    for(int i = 0; i < log_buff_size-1 && !busy; i++) 
+      if(iteration_log[i] != UINT_MAX) busy = 1;
+    if(busy || iteration_log[log_buff_size-1] != last_mask)
+      pthread_cond_wait(&pad_done, &mutex_log);
+    else 
+      done = 1;
+  }
+  memset(iteration_log, 0, sizeof(int) * log_buff_size);
+  pthread_mutex_unlock(&mutex_log);
+}
+
 void* worker_thread(void* args){
   struct pthread_args *my_args = (struct pthread_args*)args;
   int start = pad_size + my_args->tid * job_size;
@@ -393,10 +405,10 @@ void* worker_thread(void* args){
 
 void log_job(int start){
   int job_num = (start-pad_size) / job_size;
-  int shift = job_num % 64;
-  int arr_index = job_num / 64;
+  int shift = job_num % (INT_NUM_BITS);
+  int arr_index = job_num / (INT_NUM_BITS);
   pthread_mutex_lock(&mutex_log);
-  iteration_log[arr_index] |= (uint64_t) 1 << shift;
+  iteration_log[arr_index] |= 1 << shift;
   //if(start == pad_size || start == last_job) {
   pthread_cond_signal(&pad_done);
   pthread_mutex_unlock(&mutex_log);

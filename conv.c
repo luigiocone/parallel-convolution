@@ -20,12 +20,19 @@
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13     /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
 #define ROWS_PER_JOB 8
-#define INT_NUM_BITS 8 * sizeof(int)
+#define INT_NUM_BITS (8 * sizeof(int))
 
 void* worker_thread(void*);
-void wait_iteration_end(int);
-void deposit_jobs(int, int, int, float*, float*);
-void conv_subgrid(float*, float*, int, int);
+void help_worker_threads(float*, float*, uint*);
+void deposit_jobs(float*, float*, uint*, uint*, int, int, int);
+int halfiteration_deposit(float*, float*, uint*, uint*, int, uint*);
+void deposit_pad_jobs(int);
+int check_pad_jobs_dependencies(MPI_Request*, MPI_Status*, uint*, int*, int, int);
+void wait_pads_completion(uint*);
+int is_log_high(uint*);
+int is_job_done(uint*, int);
+void conv_subgrid(float*, float*, uint*, int, int);
+void log_job(uint*, int);
 float normalize(float, float*);
 void init_read(FILE*, FILE*);
 void read_data(FILE*, int, int, int);
@@ -33,12 +40,12 @@ void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 
 struct job {
-    int start, end, iter;
+  int start, end, iter;
 };
 
 struct pthread_args {
-    int tid;
-    //int rank;
+  int tid;
+  //int rank;
 };
 pthread_mutex_t mutex_job = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mutex_log = PTHREAD_MUTEX_INITIALIZER;
@@ -48,14 +55,18 @@ pthread_cond_t not_empty = PTHREAD_COND_INITIALIZER;
 int front = 0, rear = 0, count = 0;
 
 struct job *jobs;             /* Queue of jobs */
-unsigned int* iteration_log;           /* Bit map of completed job during an iteration */
+uint* curr_iteration_log;     /* Bit map of completed job for current convolution iteration */
+uint* next_iteration_log;     /* Bit map of completed job for next convolution iteration */
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
 uint8_t kern_width;           /* Number of elements in one kernel matrix row */
 uint16_t grid_width;          /* Number of elements in one grid matrix row */
 uint64_t grid_size;           /* Number of elements in whole grid matrix */
 uint16_t kern_size;           /* Number of elements in whole kernel matrix */
 uint16_t pad_size;            /* Number of elements in the pad section of the grid matrix */
+int rows_per_proc_size;       /* Number of elements assigned to a process */
 int job_size;                 /* Number of elements in a job */
+int log_buff_size;            /* Max number of jobs in "jobs" buffer */
+int total_jobs;               /* Number of jobs for one iteration */
 int last_job;                 /* Row index of last job (bordering bottom pads) */
 int num_procs;                /* Number of MPI processes in the communicator */
 int num_threads;              /* Number of threads for every MPI process */
@@ -126,16 +137,19 @@ int main(int argc, char** argv) {
   }
 
   /* Data splitting and variable initialization */
-  const int grid_height = (grid_width / num_procs);             /* Grid matrix is square, so grid_width and grid_height are the same before data splitting */
+  const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;      /* Rank of process having rows next to this process */
+  const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;      /* Rank of process having rows prev to this process */
+  const int grid_height = grid_width / num_procs;               /* Number of rows assigned to current process */
   const int start = grid_height * rank;                         /* Index of the first row for current process */
   const int end = grid_height - 1 + start;                      /* Index of the final row for current process */
   const int rows_per_proc = end + 1 - start;                    /* Number of rows assigned to a process */
-  const int rows_per_proc_size = rows_per_proc*grid_width;      /* Number of elements assigned to a process */
-  const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;      /* Rank of process having rows next to this process */
-  const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;      /* Rank of process having rows prev to this process */
-  const int total_jobs = (grid_width / num_procs) / ROWS_PER_JOB;
-  const int log_buff_size = (total_jobs + INT_NUM_BITS-1) / INT_NUM_BITS;
-  iteration_log = calloc(sizeof(int), log_buff_size);
+  rows_per_proc_size = rows_per_proc*grid_width;                /* Number of elements assigned to a process */
+  total_jobs = grid_height / ROWS_PER_JOB;
+  log_buff_size = (total_jobs + INT_NUM_BITS-1) / INT_NUM_BITS;
+  curr_iteration_log = calloc(sizeof(uint), log_buff_size);
+  next_iteration_log = calloc(sizeof(uint), log_buff_size);
+  uint* inserted_log = calloc(sizeof(uint), log_buff_size);
+  uint* log_copy = malloc(sizeof(uint) * log_buff_size);
 
   /* Read grid data */
   grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
@@ -154,9 +168,12 @@ int main(int argc, char** argv) {
   time_start = PAPI_get_real_usec();
   float *my_old_grid = old_grid;
   float *my_grid = grid;
-  float *temp;
+  float *temp_grid;
+  uint *my_curr_log = curr_iteration_log;
+  uint *my_next_log = next_iteration_log;
+  uint *temp_log;
 
-  /* PThreads creation */
+  /* PThreads creation (every thread starts with a default job) */
   struct pthread_args* args = malloc(sizeof(struct pthread_args) * num_threads);
   for(int i = 0; i < num_threads; i++) {
     args[i].tid = i;
@@ -175,23 +192,33 @@ int main(int argc, char** argv) {
     pthread_cond_wait(&not_full, &mutex_job);
   }
   jobs[rear].start = last_job;
-  jobs[rear].end = rows_per_proc_size+pad_size;
+  jobs[rear].end = last_job + job_size;
   jobs[rear].iter = 0;
   rear = (rear+1) % num_jobs;
   count++;
   pthread_cond_signal(&not_empty);
   pthread_mutex_unlock(&mutex_job);
-  
-  /* Deposit all remaining jobs (index after initial thread creation job) */
-  deposit_jobs(pad_size + num_threads * job_size, last_job, 0, my_old_grid, my_grid);
-  wait_iteration_end(total_jobs);
+
+  /* Deposit all remaining jobs */
+  deposit_jobs(my_old_grid, my_grid, NULL, my_curr_log, (pad_size + num_threads * job_size), last_job, 0);
+
+  /* flags[0]: if second and penultimate jobs has been completed 
+   * flags[1]: if new pads has been received (pointless if there is only one process) */
+  int flags[2];
+  if(num_procs == 1) flags[1] = 1;
 
   /* Second (or higher) iterations */
   for(uint8_t iters = 1; iters < num_iterations; iters++) {
-    /* Swap grid pointers */
-    temp = my_old_grid;
+    temp_grid = my_old_grid;
     my_old_grid = my_grid;
-    my_grid = temp;
+    my_grid = temp_grid;
+
+    flags[0] = 0;
+    if(num_procs > 1) flags[1] = 0;
+    
+    /* Jobs belonging to previous iteration are still in jobs buffer (or under processing by worker
+     * threads). To send my top and bottom rows (bordering pads) their jobs have to be done */
+    wait_pads_completion(my_curr_log);
 
     if(num_procs > 1) {
       if (!rank) {
@@ -211,39 +238,90 @@ int main(int argc, char** argv) {
       }
     }
 
-    /* Start convolution only of central grid elements */
-    int curr_job = pad_size + job_size;
-    deposit_jobs(curr_job, last_job, iters, my_old_grid, my_grid);
+    /* Next iteration pad jobs have the priority, insert them as soon as possible */
+    rc = check_pad_jobs_dependencies(req, status, my_curr_log, flags, rank, iters);
+    if(rc) deposit_pad_jobs(iters);
+    
+    /* Before inserting the next iteration jobs (except for pads), main thread will fetch some job. After this call, the  
+     * situation will be: count <= num_threads and there are at most "num_threads" jobs belonging to previous iteration */
+    help_worker_threads(my_grid, my_old_grid, my_curr_log);
 
-    /* Convolution of top and bottom rows (the ones bordering pad rows) */
-    if(num_procs > 1) {
-      if(!rank || rank == num_procs-1)
-        rc = MPI_Wait(req, status);
-      else 
-        rc = MPI_Waitall(2, req, status);
+    if(!rc) {
+      rc = check_pad_jobs_dependencies(req, status, my_curr_log, flags, rank, iters);
+      if(rc) deposit_pad_jobs(iters);
     }
 
-    /* Deposit jobs for pad convolution */
-    pthread_mutex_lock(&mutex_job);
-    while(count > num_jobs-2) {
-      pthread_cond_wait(&not_full, &mutex_job);
-    }
-    jobs[rear].start = pad_size;
-    jobs[rear].end = pad_size + job_size;
-    jobs[rear].iter = iters;
-    rear = (rear+1) % num_jobs;
-    jobs[rear].start = last_job;
-    jobs[rear].end = rows_per_proc_size + pad_size;
-    jobs[rear].iter = iters;
-    rear = (rear+1) % num_jobs;
-    count+=2;
-    pthread_cond_signal(&not_empty);
-    pthread_mutex_unlock(&mutex_job);
+    /* Will be deposited only the jobs belonging to the next iteration (giving priority to pad jobs if not
+     * already inserted). Jobs of previous iteration are all already inserted, but not completed yet */
+    int prev_iter_completed;
+    int inserted, total_inserted = 0;
 
-    wait_iteration_end(total_jobs);
-    memset(iteration_log, 0, sizeof(int) * log_buff_size);
+    pthread_mutex_lock(&mutex_log);
+    memcpy(log_copy, my_curr_log, sizeof(uint) * log_buff_size);
     pthread_mutex_unlock(&mutex_log);
+    prev_iter_completed = is_log_high(log_copy);
+
+    while(!prev_iter_completed && total_inserted < total_jobs-2) {
+      inserted = halfiteration_deposit(my_old_grid, my_grid, inserted_log, log_copy, iters, my_next_log);
+      if(!rc) {
+        rc = check_pad_jobs_dependencies(req, status, my_curr_log, flags, rank, iters);
+        if(rc) deposit_pad_jobs(iters); 
+      }
+
+      /* Checking if current log_copy is completely consumed (its jobs are all inserted) */
+      if(total_inserted != (total_inserted + inserted)) {
+        total_inserted += inserted;
+        continue;
+      }
+      
+      /* Log_copy is completely consumed. If the shared log is different from the copy then copy it again, else wait */
+      pthread_mutex_lock(&mutex_log);
+      for(int i = 0; i < log_buff_size; i++) {
+        if(log_copy[i] != my_curr_log[i]) {
+          continue;
+        }
+        pthread_cond_wait(&pad_done, &mutex_log);
+        break;
+      }
+      memcpy(log_copy, my_curr_log, sizeof(uint) * log_buff_size);
+      pthread_mutex_unlock(&mutex_log);
+      prev_iter_completed = is_log_high(log_copy);
+    }
+    /* At this point, all jobs of the previous iteration are done */
+
+    /* Final pad jobs dependency check (this time will wait if necessary) */
+    if(!rc) {
+      if(!flags[0]){
+        const uint ai = (total_jobs-2) / INT_NUM_BITS;
+        const uint sh = (total_jobs-2) % INT_NUM_BITS;
+        const uint ma = 1 << sh;
+        pthread_mutex_lock(&mutex_log);
+        while(!(my_curr_log[0] & 0x10) || !(my_curr_log[ai] & ma)) {
+          pthread_cond_wait(&pad_done, &mutex_log);
+        }
+        pthread_mutex_unlock(&mutex_log);
+      }
+      if(num_procs > 1 && !flags[1]) {
+        int num = (!rank || rank == num_procs-1) ? 2 : 4;
+        MPI_Waitall(num, req, status);
+      }
+      deposit_pad_jobs(iters);
+    }
+    
+    /* Reset and swap logs for next iteration */
+    pthread_mutex_lock(&mutex_log);
+    memset(my_curr_log, 0, sizeof(uint) * log_buff_size);
+    pthread_mutex_unlock(&mutex_log);
+    temp_log = my_curr_log;
+    my_curr_log = my_next_log;
+    my_next_log = temp_log;
+
+    /* Deposit all jobs left (avoiding the already inserted ones) */
+    deposit_jobs(my_old_grid, my_grid, inserted_log, my_curr_log, (pad_size + job_size), last_job, iters);
+    memset(inserted_log, 0, sizeof(uint) * log_buff_size);
   }
+
+  help_worker_threads(my_old_grid, my_grid, my_curr_log);
 
   /* Deposit jobs for termination */
   for(int i = 0; i < num_threads; i++) {
@@ -258,25 +336,32 @@ int main(int argc, char** argv) {
     pthread_mutex_unlock(&mutex_job);
   }
 
-  MPI_Barrier(MPI_COMM_WORLD);
-  if(!rank) {
-    time_stop = PAPI_get_real_usec();
-    printf("(PAPI) Elapsed time: %lld us\n", (time_stop - time_start));
+  /* Wait workers termination */
+  pthread_mutex_lock(&mutex_log);
+  while(!is_log_high(my_curr_log)) {
+    pthread_cond_wait(&pad_done, &mutex_log);
   }
+  pthread_mutex_unlock(&mutex_log);
 
+  time_stop = PAPI_get_real_usec();
+  printf("Rank[%d] | Elapsed time: %lld us\n", rank, (time_stop - time_start));
+  
   float *write_buffer = malloc(grid_size * sizeof(float) - grid_width * (grid_width / num_procs));
   if(rank != 0) {
-    MPI_Isend(&my_grid[pad_size], rows_per_proc_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
+    MPI_Send(&my_grid[pad_size], rows_per_proc_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD);
+    //MPI_Isend(&my_grid[pad_size], rows_per_proc_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
   } else {
+    // wb
     for(int k = 0; k < num_procs-1; k++) {
-      MPI_Irecv(&write_buffer[grid_width * (grid_width / num_procs) * k], rows_per_proc_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, &req[k]);
+      //MPI_Irecv(&write_buffer[grid_width * (grid_width / num_procs) * k], rows_per_proc_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, &req[k]);
+      MPI_Recv(&write_buffer[grid_width * (grid_width / num_procs) * k], rows_per_proc_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, status);
     }
   }
 
   /* Stop the count! */ 
   if ((rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
     handle_PAPI_error(rc, "Error in PAPI_stop().");
-  printf("Rank: %d, total cache misses:%lld\n", rank, num_cache_miss);
+  printf("Rank[%d] | Total L2 cache misses:%lld\n", rank, num_cache_miss);
   
   /* Store computed matrix */
   if (!rank) {
@@ -286,73 +371,23 @@ int main(int argc, char** argv) {
       exit(-1);
     }
     store_data(fp_result, &my_grid[pad_size], rows_per_proc_size);
-    MPI_Waitall(num_procs-1, req, status);
-    store_data(fp_result, write_buffer, grid_size-rows_per_proc_size);
+    //MPI_Waitall(num_procs-1, req, status);
+    store_data(fp_result, write_buffer, grid_size - rows_per_proc_size);
     fclose(fp_result);
   }
-  
+
+  MPI_Barrier(MPI_COMM_WORLD);
   MPI_Finalize();
   free(write_buffer);
-  free(iteration_log);
+  free(curr_iteration_log);
+  free(next_iteration_log);
+  free(log_copy);
   free(args);
   free(jobs);
   free(grid);
   free(old_grid);
   free(kernel);
-  pthread_exit(0);
-}
-
-void deposit_jobs(int curr_job, int end_job, int iter, float *my_old_grid, float *my_grid){
-  int temp;
-  while(curr_job < end_job) {
-    pthread_mutex_lock(&mutex_job);
-    while(count == num_jobs) {
-      /* Manager does some work if buffer is full */
-      if(curr_job < end_job) {
-        pthread_mutex_unlock(&mutex_job);
-        temp = curr_job;
-        curr_job += job_size;
-        conv_subgrid(my_old_grid, my_grid, temp, curr_job);
-        pthread_mutex_lock(&mutex_job);
-      } else
-        pthread_cond_wait(&not_full, &mutex_job);
-    }
-    while(count != num_jobs && curr_job < end_job) {
-      jobs[rear].start = curr_job;
-      jobs[rear].end = curr_job + job_size;
-      jobs[rear].iter = iter;
-      rear = (rear+1) % num_jobs;
-      count++;
-      curr_job += job_size;
-    }
-    pthread_cond_signal(&not_empty);
-    pthread_mutex_unlock(&mutex_job);
-  }
-}
-
-void wait_iteration_end(int total_jobs){
-  const unsigned int last_mask = UINT_MAX >> (INT_NUM_BITS - (total_jobs % (INT_NUM_BITS)));
-  const unsigned int log_buff_size = (total_jobs + INT_NUM_BITS-1) / (INT_NUM_BITS);
-
-  /*int shift = (total_jobs-1) % 32;
-  int arr_index = (total_jobs-1) / 32;
-  int mask = 1 << shift;*/
-  //while( !(iteration_log[0] & 1)  || !(iteration_log[arr_index] & mask)) {
-
-  pthread_mutex_lock(&mutex_log);
-  int busy = 0;
-  int done = 0;
-  while(!done) {
-    busy = 0;
-    for(int i = 0; i < log_buff_size-1 && !busy; i++) 
-      if(iteration_log[i] != UINT_MAX) busy = 1;
-    if(busy || iteration_log[log_buff_size-1] != last_mask)
-      pthread_cond_wait(&pad_done, &mutex_log);
-    else 
-      done = 1;
-  }
-  memset(iteration_log, 0, sizeof(int) * log_buff_size);
-  pthread_mutex_unlock(&mutex_log);
+  exit(0);
 }
 
 void* worker_thread(void* args){
@@ -362,12 +397,13 @@ void* worker_thread(void* args){
   int iteration = 0, temp_iter;
   float *my_old_grid = old_grid;
   float *my_grid = grid;
-  float *temp;
+  uint* my_curr_log = curr_iteration_log;
   long_long time_start, time_stop;
   long_long total_wait_time = 0;
 
   /* All threads starts with an initial job after creation */
-  conv_subgrid(my_old_grid, my_grid, start, end);
+  conv_subgrid(my_old_grid, my_grid, my_curr_log, start, end);
+
   while(1) {
     time_start = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_job);
@@ -393,28 +429,216 @@ void* worker_thread(void* args){
         pthread_exit(0);
       }
       iteration = temp_iter;
-      temp = my_old_grid;
-      my_old_grid = my_grid;
-      my_grid = temp;
+      /* Swap grid and log pointers */
+      if(iteration % 2) {
+        my_old_grid = grid;
+        my_grid = old_grid;
+        my_curr_log = next_iteration_log;
+      } else {
+        my_old_grid = old_grid;
+        my_grid = grid;
+        my_curr_log = curr_iteration_log;
+      }
     }
 
     /* Job computing */
-    conv_subgrid(my_old_grid, my_grid, start, end);
+    conv_subgrid(my_old_grid, my_grid, my_curr_log, start, end);
   }
 }
 
-void log_job(int start){
-  int job_num = (start-pad_size) / job_size;
-  int shift = job_num % (INT_NUM_BITS);
-  int arr_index = job_num / (INT_NUM_BITS);
+void help_worker_threads(float* my_old_grid, float* my_grid, uint* iteration_log) {
+  int start, end;
+  pthread_mutex_lock(&mutex_job);
+  while(count > num_threads) {
+    /* Fetching a job from jobs queue */
+    start = jobs[front].start;
+    end = jobs[front].end;
+    front = (front+1) % num_jobs;
+    count--;
+    pthread_mutex_unlock(&mutex_job);
+    
+    /* Job computing */
+    conv_subgrid(my_old_grid, my_grid, iteration_log, start, end);
+    pthread_mutex_lock(&mutex_job);
+  }
+  pthread_mutex_unlock(&mutex_job);
+}
+
+void deposit_jobs(float *my_old_grid, float *my_grid, uint* inserted_log, uint* iteration_log, int curr_job, int end_job, int iter){
+  int temp = 0;
+  int curr = 0; 
+  int last;
+  int next[total_jobs];
+  
+  /* Store indexes of jobs already done (to avoid re-insertion in jobs buffer) */
+  if (inserted_log != NULL) {
+    for(int i = 1;  i < total_jobs-1; i++) {
+      if(inserted_log[i / INT_NUM_BITS] & (1 << (i % INT_NUM_BITS))) {
+        next[curr] = i * job_size + pad_size;
+        curr++;
+      }
+    }
+  }
+  
+  /* Start job insertion */
+  last = curr-1;
+  curr = 0;
+  while(curr_job < end_job) {
+    if(curr <= last && curr_job == next[curr]) {
+      curr_job += job_size;
+      curr += 1;
+      continue;
+    }
+
+    pthread_mutex_lock(&mutex_job);
+    while(count == num_jobs) {
+      /* Manager does some work if buffer is full */
+      if(curr_job < end_job) {
+        if(curr <= last && curr_job == next[curr]) {
+          curr_job += job_size;
+          curr += 1;
+          continue;
+        }
+        pthread_mutex_unlock(&mutex_job);
+        temp = curr_job;
+        curr_job += job_size;
+        conv_subgrid(my_old_grid, my_grid, iteration_log, temp, curr_job);
+        pthread_mutex_lock(&mutex_job);
+      } else 
+        pthread_cond_wait(&not_full, &mutex_job);
+    }
+
+    /* Insert jobs in this order: first, last, second, penultimate, ... */
+    while(count != num_jobs && curr_job < end_job) {
+      if(temp % 2) {
+        if(curr <= last && curr_job == next[curr]) {
+          curr_job += job_size;
+          curr += 1;
+          continue;
+        }
+        jobs[rear].start = curr_job;
+        jobs[rear].end = curr_job + job_size;
+        curr_job += job_size;
+      } else {
+        if(curr <= last && (end_job-job_size) == next[last]) {
+          end_job -= job_size;
+          last -= 1;
+          continue;
+        }
+        jobs[rear].start = end_job-job_size;
+        jobs[rear].end = end_job;
+        end_job -= job_size;
+      }
+      jobs[rear].iter = iter;
+      rear = (rear+1) % num_jobs;
+      count++;
+      temp++;
+    }
+    pthread_cond_signal(&not_empty);
+    pthread_mutex_unlock(&mutex_job);
+  }
+}
+
+int halfiteration_deposit(float* my_old_grid, float* my_grid, uint* inserted_log, uint* log_copy, int iter, uint* next_log) {
+  int inserted = 0;
+  int odd = 0;
+  int condition, job, job_start;
+
+  for(int i = 1; i < (total_jobs)/2 && inserted < num_threads;) {
+    job = (odd % 2) ? i : (total_jobs-1-i);
+
+    /* Check if current job has previous and next job completed */
+    condition = log_copy[(job-1) / INT_NUM_BITS] & (1 << ((job-1) % INT_NUM_BITS)) 
+             && log_copy[(job  ) / INT_NUM_BITS] & (1 << ((job  ) % INT_NUM_BITS)) 
+             && log_copy[(job+1) / INT_NUM_BITS] & (1 << ((job+1) % INT_NUM_BITS))
+             && (inserted_log[job / INT_NUM_BITS] & (1 << (job % INT_NUM_BITS))) == 0;
+
+    if(condition) {
+      job_start = job * job_size + pad_size;
+      inserted += 1;
+      inserted_log[job / INT_NUM_BITS] |= (1 << (job % INT_NUM_BITS));
+      pthread_mutex_lock(&mutex_job);
+      if (count == num_jobs) {
+        pthread_mutex_unlock(&mutex_job);
+        conv_subgrid(my_old_grid, my_grid, next_log, job_start, (job_start+job_size));
+      } else {
+        jobs[rear].start = job_start;
+        jobs[rear].end = job_start + job_size;
+        jobs[rear].iter = iter;
+        rear = (rear+1) % num_jobs;
+        count++;
+        pthread_cond_signal(&not_empty);
+        pthread_mutex_unlock(&mutex_job);
+      }
+    }
+
+    if(odd % 2) i++;
+    odd++;
+  }
+  return inserted;
+}
+
+void deposit_pad_jobs(int iters) {
+  /* Deposit jobs bordering pads (top and bottom ones) */
+  pthread_mutex_lock(&mutex_job);
+  while(count > num_jobs-2) {
+    pthread_cond_wait(&not_full, &mutex_job);
+  }
+  jobs[rear].start = pad_size;
+  jobs[rear].end = pad_size + job_size;
+  jobs[rear].iter = iters;
+  rear = (rear+1) % num_jobs;
+  jobs[rear].start = last_job;
+  jobs[rear].end = last_job + job_size;  // == rows_per_proc_size + pad_size;
+  jobs[rear].iter = iters;
+  rear = (rear+1) % num_jobs;
+  count += 2;
+  pthread_cond_signal(&not_empty);
+  pthread_mutex_unlock(&mutex_job);
+}
+
+int check_pad_jobs_dependencies(MPI_Request* requests, MPI_Status* status, uint* my_curr_log, int* flags, int rank, int iters) {
+  /* Check if 2nd and penultimate jobs have been computed */
+  if(!flags[0]) {
+    pthread_mutex_lock(&mutex_log);
+    flags[0] = is_job_done(my_curr_log, 1) && is_job_done(my_curr_log, total_jobs-2);
+    pthread_mutex_unlock(&mutex_log);
+  }
+
+  /* Check if new pads have been receveid */
+  if(!flags[1]) {
+    int num = (!rank || rank == num_procs-1) ? 2 : 4;
+    MPI_Testall(num, requests, &flags[1], status);
+  }
+  
+  return (flags[0] && flags[1]);
+}
+
+void wait_pads_completion(uint* iteration_log){
+  const uint arr_index = (total_jobs-1) / INT_NUM_BITS;
+  const uint shift = (total_jobs-1) % INT_NUM_BITS;
+  const uint mask = 1 << shift;
+
   pthread_mutex_lock(&mutex_log);
-  iteration_log[arr_index] |= 1 << shift;
-  //if(start == pad_size || start == last_job) {
-  pthread_cond_signal(&pad_done);
+  while(!(iteration_log[0] & 1) || !(iteration_log[arr_index] & mask)) {
+    pthread_cond_wait(&pad_done, &mutex_log);
+  }
   pthread_mutex_unlock(&mutex_log);
 }
 
-void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {
+int is_log_high(uint* log){
+  const uint last_mask = UINT_MAX >> (INT_NUM_BITS - (total_jobs % INT_NUM_BITS));
+  for(int i = 0; i < log_buff_size-1; i++) 
+    if(log[i] != UINT_MAX) return 0;
+  if(log[log_buff_size-1] != last_mask) return 0;
+  return 1;
+}
+
+int is_job_done(uint* log, int job_index){
+  return (log[job_index / INT_NUM_BITS] & (1 << (job_index % INT_NUM_BITS))) != 0;
+}
+
+void conv_subgrid(float *sub_grid, float *new_grid, uint *iteration_log, int start_index, int end_index) {
   float result;
   float matrix[kern_size];                 /* Temp buffer used for normalization */
   int col = start_index % grid_width;      /* Index of current column */
@@ -474,7 +698,19 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       col = 0;
     }
   }
-  log_job(start_index);
+
+  /* Log job as completed */
+  log_job(iteration_log, start_index);
+}
+
+void log_job(uint* iteration_log, int start) {
+  const int job_num = (start-pad_size) / job_size;
+  const int shift = job_num % INT_NUM_BITS;
+  const int arr_index = job_num / INT_NUM_BITS;
+  pthread_mutex_lock(&mutex_log);
+  iteration_log[arr_index] |= 1 << shift;
+  pthread_cond_signal(&pad_done);
+  pthread_mutex_unlock(&mutex_log);
 }
 
 float normalize(float conv_res, float *matrix) {
@@ -519,8 +755,8 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
   offset = 0;
   for(i = 0; i < kern_size && offset < buffer_size; i++) {
     kernel[i] = atof(&buffer[offset]);
-    while(buffer[offset] >= '+') offset++;
-    while(buffer[offset] != '\0' && buffer[offset] < '+') offset++;
+    while(buffer[offset] >= '+') offset++;                              /* Jump to next blank character */
+    while(buffer[offset] != '\0' && buffer[offset] < '+') offset++;     /* Jump all blank characters */
   }
 
   if(i != kern_size) {

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# = 0 ]; then
-    mpirun -np 2 ./conv 2    # Suggested only one iteration (./conv 1), two are used just for testing
+    mpirun -np 4 ./conv 2
     exit 0
 fi
 
@@ -13,13 +13,12 @@ case $1 in
     mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 2 16
     ;;
 
-  connect)   # Connect to cluster
-    ssh -p 22001 $CLUSTER_UNISANNIO
+  paranoid)   # Temporary reduce paranoid level to allow cache event counters (PAPI)
+    sudo sh -c 'echo 2 >/proc/sys/kernel/perf_event_paranoid'
     ;;
 
-  clean)
-    rm -f conv conv.clog2 conv.slog2
-    pkill -u ocone
+  connect)   # Connect to cluster
+    ssh -p 22001 $CLUSTER_UNISANNIO
     ;;
 
   send)      # Transfer source code, makefile, and run.sh to cluster
@@ -30,8 +29,9 @@ case $1 in
     scp -P 22001 $CLUSTER_UNISANNIO:$WORKSPACE/conv.clog2 ./
     ;;
   
-  valgrind)
-    valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose --log-file=valgrind-out.txt mpirun -np 2 ./conv 2
+  clean)
+    rm -f conv conv.clog2 conv.slog2
+    pkill -u ocone
     ;;
   
   createlog) # Create a .clog2 file. Java commands must be executed on local machine 
@@ -45,10 +45,6 @@ case $1 in
 
   showlog)
     java -jar jumpshot.jar conv.slog2
-    ;;
-
-  paranoid)   # Temporary reduce paranoid level to allow cache event counters
-    sudo sh -c 'echo -1 >/proc/sys/kernel/perf_event_paranoid'
     ;;
 
   *)
@@ -65,3 +61,5 @@ esac
 # $? -> return value
 # $# -> num args
 # $1 -> first arg
+
+#valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose --log-file=valgrind-out.txt mpirun -np 2 ./conv 2

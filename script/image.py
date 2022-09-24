@@ -2,8 +2,8 @@ import numpy as np
 from skimage import data
 from matplotlib import pyplot as plt
 
-GRID_FILE_NAME = "grid.txt";
-RESULT_FILE_NAME = "result.txt";
+GRID_FILE_NAME = "../io-files/grid.txt";
+RESULT_FILE_NAME = "../io-files/result.txt";
 
 def img_to_matrix(img):
     print('Type:', type(img))
@@ -28,7 +28,7 @@ def main():
     
     # From matrix file to img
     src_img = np.genfromtxt(GRID_FILE_NAME,   delimiter=' ', dtype=float, skip_header=1)
-    res_img = np.genfromtxt(RESULT_FILE_NAME, delimiter=' ', dtype=float, skip_header=2, skip_footer=2, usecols=range(2,510))
+    res_img = np.genfromtxt(RESULT_FILE_NAME, delimiter=' ', dtype=float)
 
     #subplot(r,c) provide the no. of rows and columns
     f, axarr = plt.subplots(1,2) 

@@ -1,10 +1,11 @@
 #!/bin/bash
 # Testing different interleavings (hopefully)
-SEQ_PATH="/home/luigi/Desktop/seq/io-files/result.txt"
-PAR_PATH="/home/luigi/Desktop/Parallel-Convolution-MPI/io-files/result.txt"
+SEQ_PATH="/home/luigi/Desktop/seq"
+PAR_PATH="/home/luigi/Desktop/Parallel-Convolution-MPI"
 COND=''
 declare -i i=0
 
+cd $PAR_PATH
 make
 echo ""
 echo "Printing executions errors"
@@ -15,7 +16,7 @@ if [ $# = 1 ]; then
     do
         echo "Execution $i:"
         ./run.sh > outputs.txt
-        COND=$(diff $PAR_PATH $SEQ_PATH | grep '^[1-9]')
+        COND=$(diff $PAR_PATH/io-files/result.txt $SEQ_PATH/io-files/result.txt | grep '^[1-9]')
         i=$(( i + 1 ))
     done
     echo "${COND}"
@@ -25,6 +26,6 @@ else
     do
        echo "Execution $i:"
        ./run.sh > /dev/null   # silencing the output
-       diff $PAR_PATH $SEQ_PATH | grep '^[1-9]'
+       diff $PAR_PATH/io-files/result.txt $SEQ_PATH/io-files/result.txt | grep '^[1-9]'
     done
 fi

@@ -1,5 +1,6 @@
 import numpy as np
-from skimage import data
+import imageio.v2 as imageio
+from skimage import data, color
 from matplotlib import pyplot as plt
 
 GRID_FILE_NAME = "../io-files/grid.txt";
@@ -12,20 +13,23 @@ def img_to_matrix(img):
 
     # conv.c works only with square matrix 
     if (img.shape[0] != img.shape[1]):
+        print("Not a square image")
         return;
     
-    f = open(GRID_FILE_NAME, "w")
-    f.write("{0}\n".format(img.shape[0]))
-    # Format "%e" has six digits after point as standard 
-    np.savetxt(f, img, delimiter=' ', fmt="%+e")
-    f.close()
+    with open(GRID_FILE_NAME, "w+") as f:
+        f.write("{0}\n".format(img.shape[0]))
+        np.savetxt(f, img, delimiter=' ', fmt="%+e")   # Format "%+e" has 13 chars
 
 def main():
-    # To store a custom image from scikit-image dataset
-    # src_img = data.camera()  # This should be 512x512
-    # img_to_matrix(src_img)   # From img to matrix file
-    #return;
-    
+    # Get an image from scikit-image dataset
+    '''src_img = data.camera()'''  # 512x512
+    # Or else, get image from file
+    '''src_img = imageio.imread("/home/luigi/Desktop/input.jpg")
+    src_img = color.rgb2gray(src_img)'''
+       
+    # Finally, store the image in a txt file (as a float matrix)
+    '''img_to_matrix(src_img)'''
+
     # From matrix file to img
     src_img = np.genfromtxt(GRID_FILE_NAME,   delimiter=' ', dtype=float, skip_header=1)
     res_img = np.genfromtxt(RESULT_FILE_NAME, delimiter=' ', dtype=float)

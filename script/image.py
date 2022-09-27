@@ -17,7 +17,7 @@ def img_to_matrix(img):
     f = open(GRID_FILE_NAME, "w")
     f.write("{0}\n".format(img.shape[0]))
     # Format "%e" has six digits after point as standard 
-    np.savetxt(f, img, delimiter=' ', fmt="%e")
+    np.savetxt(f, img, delimiter=' ', fmt="%+e")
     f.close()
 
 def main():

@@ -766,7 +766,7 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
 
 void read_data(FILE *fp_grid, float* whole_grid, int rows_per_proc) {
   /* Positive non-blank chars + Blank chars */
-  const int grid_row_chars = (grid_width * (MAX_CHARS-1) + grid_width) * sizeof(char);
+  const int grid_row_chars = (grid_width * MAX_CHARS + grid_width) * sizeof(char);
   int buffer_size = grid_row_chars * grid_width;
   int offset = 0, i = 0;
   int iterations = grid_size;
@@ -813,7 +813,7 @@ void store_data(FILE *fp_result, float *float_buffer, int count){
 
   /* Write buffer filling */
   for(int i = 0; i < count; i++){
-    offset += sprintf(&buffer[offset], "%e ", float_buffer[i]);
+    offset += sprintf(&buffer[offset], "%+e ", float_buffer[i]);
     if (i == limit) {
       limit += grid_width;
       offset += sprintf(&buffer[offset], "\n");

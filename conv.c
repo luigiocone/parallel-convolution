@@ -34,7 +34,7 @@ int is_log_high(uint*);
 void conv_subgrid(float*, float*, uint*, int, int);
 void log_job(uint*, int);
 void init_read(FILE*, FILE*);
-void read_data(FILE*, int, int, int);
+void read_data(FILE*, float*, int);
 void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 
@@ -117,33 +117,43 @@ int main(int argc, char** argv) {
   if((rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(rc, "Error in PAPI_start().");
 
-  /* Opening input files in dir "./io-files" */
-  if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
-    fprintf(stderr, "Error while opening grid file\n");
-    exit(-1);
+  if(!rank) {
+    /* Opening input files in dir "./io-files" */
+    if((fp_grid = fopen(GRID_FILE_PATH, "r")) == NULL) {
+      fprintf(stderr, "Error while opening grid file\n");
+      exit(-1);
+    }
+    if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
+      fprintf(stderr, "Error while opening kernel file\n");
+      exit(-1);
+    }
+    init_read(fp_grid, fp_kernel);
+  } else {
+    int to_recv[2];
+    MPI_Ibcast(to_recv, 2, MPI_INT, 0, MPI_COMM_WORLD, req);   /* Async bcast needed by rank 0 */
+    MPI_Wait(req, status);
+    grid_width = to_recv[0];
+    kern_width = to_recv[1];
+    kern_size = kern_width * kern_width;
+    kernel = malloc(sizeof(float) * kern_size);
+    MPI_Ibcast(kernel, kern_size, MPI_FLOAT, 0, MPI_COMM_WORLD, req);
   }
-  if((fp_kernel = fopen(KERNEL_FILE_PATH, "r")) == NULL) {
-    fprintf(stderr, "Error while opening kernel file\n");
-    exit(-1);
-  }
-  init_read(fp_grid, fp_kernel);
+
+  grid_size = grid_width * grid_width;
+  num_pads = (kern_width - 1) / 2;
+  pad_size = grid_width * num_pads;
+  job_size = grid_width * ROWS_PER_JOB;
+  num_jobs = num_threads * 2;
+  jobs = malloc(sizeof(struct job) * num_jobs);                 /* Jobs buffer */
   assert(grid_width % num_procs == 0);
   assert(ROWS_PER_JOB > num_pads);
-
-  /* Computation of sum(dot(kernel, kernel)) */
-  for(int pos = 0; pos < kern_size; pos++){
-    kern_dot_sum += kernel[pos] * kernel[pos];
-  }
 
   /* Data splitting and variable initialization */
   const uint8_t next = (rank != num_procs-1) ? rank+1 : 0;      /* Rank of process having rows next to this process */
   const uint8_t prev = (rank != 0) ? rank-1 : num_procs-1;      /* Rank of process having rows prev to this process */
-  const int grid_height = grid_width / num_procs;               /* Number of rows assigned to current process */
-  const int start = grid_height * rank;                         /* Index of the first row for current process */
-  const int end = grid_height - 1 + start;                      /* Index of the final row for current process */
-  const int rows_per_proc = end + 1 - start;                    /* Number of rows assigned to a process */
-  rows_per_proc_size = rows_per_proc*grid_width;                /* Number of elements assigned to a process */
-  total_jobs = grid_height / ROWS_PER_JOB;
+  const int rows_per_proc = grid_width / num_procs;             /* Number of rows assigned to current process */
+  rows_per_proc_size = rows_per_proc * grid_width;              /* Number of elements assigned to a process */
+  total_jobs = rows_per_proc / ROWS_PER_JOB;
   log_buff_size = (total_jobs + INT_NUM_BITS-1) / INT_NUM_BITS;
   curr_iteration_log = calloc(sizeof(uint), log_buff_size);
   next_iteration_log = calloc(sizeof(uint), log_buff_size);
@@ -153,15 +163,19 @@ int main(int argc, char** argv) {
   /* Read grid data */
   grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
   old_grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
+  float* whole_grid;
   if(!rank){
     memset(grid, 0, pad_size * sizeof(float));
     memset(old_grid, 0, pad_size * sizeof(float));
+    whole_grid = malloc(grid_size * sizeof(float));
+    read_data(fp_grid, whole_grid, rows_per_proc);
+  } else if(rank == num_procs-1){
+    memset(&grid[(rows_per_proc_size+pad_size)], 0, pad_size * sizeof(float));
+    memset(&old_grid[(rows_per_proc_size+pad_size)], 0, pad_size * sizeof(float));
+    MPI_Recv(old_grid, (rows_per_proc_size+pad_size), MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &status[rank]);
+  } else {
+    MPI_Recv(old_grid, rows_per_proc_size+pad_size*2, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &status[rank]);
   }
-  else if(rank == num_procs-1){
-    memset(&grid[(rows_per_proc+num_pads) * grid_width], 0, pad_size * sizeof(float));
-    memset(&old_grid[(rows_per_proc+num_pads) * grid_width], 0, pad_size * sizeof(float));
-  }
-  read_data(fp_grid, start, rows_per_proc, rank);
 
   /* First iteration - No rows exchange needed */
   time_start = PAPI_get_real_usec();
@@ -171,6 +185,11 @@ int main(int argc, char** argv) {
   uint *my_curr_log = curr_iteration_log;
   uint *my_next_log = next_iteration_log;
   uint *temp_log;
+
+  if(rank) MPI_Wait(req, status);                               /* Complete kernel receive */
+  for(int pos = 0; pos < kern_size; pos++){                     /* Computation of sum(dot(kernel, kernel)) */
+    kern_dot_sum += kernel[pos] * kernel[pos];
+  }
 
   /* PThreads creation (every thread starts with a default job) */
   struct pthread_args* args = malloc(sizeof(struct pthread_args) * num_threads);
@@ -185,7 +204,7 @@ int main(int argc, char** argv) {
   }
 
   /* Insert high priority job first (the bottom rows bordering pads) */
-  last_job = (grid_height + num_pads - ROWS_PER_JOB) * grid_width;
+  last_job = (rows_per_proc + num_pads - ROWS_PER_JOB) * grid_width;
   pthread_mutex_lock(&mutex_job);
   while(count == num_jobs) {
     pthread_cond_wait(&not_full, &mutex_job);
@@ -378,6 +397,7 @@ int main(int argc, char** argv) {
   free(jobs);
   free(grid);
   free(old_grid);
+  if(!rank) free(whole_grid);
   free(kernel);
   exit(0);
 }
@@ -705,21 +725,22 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
   char *buffer;
   int kern_row_chars, buffer_size;
   int i, offset;
+  MPI_Request request[2];
 
   /* First token represent matrix dimension */
   if(fscanf(fp_grid, "%hd\n", &grid_width) == EOF || fscanf(fp_kernel, "%hhd\n", &kern_width) == EOF) {
     fprintf(stderr, "Error in file reading: first element should be the row (or column) length of a square matrix\n");
     exit(-1);
   }
-  grid_size = grid_width * grid_width;
-  kern_size = kern_width * kern_width;
-  num_pads = (kern_width - 1) / 2;
-  pad_size = grid_width * num_pads;
-  job_size = grid_width * ROWS_PER_JOB;
-  
+
+  /* Exchange initial information */
+  int to_send[] = {grid_width, kern_width};
+  MPI_Ibcast(to_send, 2, MPI_INT, 0, MPI_COMM_WORLD, request);
+
   /* Non-blank chars + Blank chars */
   kern_row_chars = (kern_width * MAX_CHARS + kern_width) * sizeof(char);
   /* Kernel data from file */
+  kern_size = kern_width * kern_width;
   buffer_size = kern_row_chars * kern_width;
   buffer = malloc(sizeof(char) * buffer_size);
   kernel = malloc(sizeof(float) * kern_size);
@@ -738,46 +759,29 @@ void init_read(FILE *fp_grid, FILE *fp_kernel){
     exit(-1);
   }
 
-  /* Jobs buffer */
-  num_jobs = num_threads * 2;
-  jobs = malloc(sizeof(struct job) * num_jobs);
+  /* Exchange kernel */
+  MPI_Ibcast(kernel, kern_size, MPI_FLOAT, 0, MPI_COMM_WORLD, &request[1]);
   free(buffer);
 }
 
-void read_data(FILE *fp_grid, int start, int rows_per_proc, int rank) {
+void read_data(FILE *fp_grid, float* whole_grid, int rows_per_proc) {
   /* Positive non-blank chars + Blank chars */
   const int grid_row_chars = (grid_width * (MAX_CHARS-1) + grid_width) * sizeof(char);
-  int offset = 0;
-  int i = 0;
-  int buffer_size = rows_per_proc + num_pads;
-  int iterations = rows_per_proc + num_pads*2;
+  int buffer_size = grid_row_chars * grid_width;
+  int offset = 0, i = 0;
+  int iterations = grid_size;
+  int start, size;
   char* buffer;
-
-  if(rank) {
-    start -= num_pads;
-    if(rank != num_procs-1) buffer_size += num_pads;
-    else iterations -= num_pads;
-  } 
-  else {
-    i = pad_size;
-    if(num_procs == 1) iterations -= num_pads;
-  }
-  
-  start *= grid_row_chars;
-  buffer_size *= grid_row_chars;
-  iterations *= grid_width;
+  MPI_Request req[num_procs];
 
   /* Grid data from file */  
-  if(start != 0 && fseek(fp_grid, start, SEEK_CUR)) {
-    fprintf(stderr, "Error while executing fseek\n");
-    exit(-1);
-  }
   buffer = malloc(buffer_size * sizeof(char));
   buffer_size = fread(buffer, sizeof(char), buffer_size, fp_grid);
   fclose(fp_grid);
-  
+
+  /* Char grid to float */
   for(; i < iterations && offset < buffer_size; i++) { 
-    old_grid[i] = atof(&buffer[offset]);
+    whole_grid[i] = atof(&buffer[offset]);
     while(buffer[offset] >= '+') offset++;
     while(buffer[offset] != '\0' && buffer[offset] < '+') offset++;
   }
@@ -787,6 +791,18 @@ void read_data(FILE *fp_grid, int start, int rows_per_proc, int rank) {
     exit(-1);
   }
   free(buffer);
+
+  /* Exchange of read data */
+  size = rows_per_proc_size;
+  if (num_procs != 1) size += pad_size;
+  memcpy(&old_grid[pad_size], whole_grid, size * sizeof(float));    /* rank 0 */
+  
+  for(int rank = 1; rank < num_procs; rank++) {
+    start = (rows_per_proc * rank - num_pads) * grid_width;
+    size = rows_per_proc_size + pad_size;
+    if(rank != num_procs-1) size += pad_size;
+    MPI_Isend(&whole_grid[start], size, MPI_FLOAT, rank, rank, MPI_COMM_WORLD, &req[rank]);
+  }
 }
 
 void store_data(FILE *fp_result, float *float_buffer, int count){

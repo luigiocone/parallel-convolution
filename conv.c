@@ -19,17 +19,13 @@
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13     /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
-
-void* worker_thread(void*);
-void conv_subgrid(float*, float*, int, int);
-void init_read(FILE*, FILE*);
-void read_data(FILE*, float*, int);
-void store_data(FILE*, float*, int);
-void handle_PAPI_error(int, char*);
+#define TOP 0
+#define BOTTOM 1
+#define CENTER 2
 
 struct thread_handler {
   int rank, tid;
-  int start, end;
+  uint start, end;
   uint8_t top_rows_done[2];
   uint8_t bot_rows_done[2];               /* Flags for current and next iteration */
   struct thread_handler* top;             /* To exchange information about pads with neighbor threads */
@@ -37,6 +33,14 @@ struct thread_handler {
   pthread_mutex_t mutex;                  /* Mutex to access this handler */
   pthread_cond_t pad_ready;               /* Thread will wait if top and bottom rows (pads) aren't ready */
 };
+
+void* worker_thread(void*);
+void update_log(uint8_t, uint8_t, uint8_t, int*, MPI_Request*, struct thread_handler*, long_long*);
+void conv_subgrid(float*, float*, int, int);
+void init_read(FILE*, FILE*);
+void read_data(FILE*, float*, int);
+void store_data(FILE*, float*, int);
+void handle_PAPI_error(int, char*);
 
 pthread_mutex_t mutex_mpi;    /* To call MPI routines (will be used only by top and bottom thread) */
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
@@ -246,16 +250,15 @@ void* worker_thread(void* args){
   float *my_grid = grid;
   float *temp;
   
-  int mpi_needed = (num_procs > 1) && ((!handler->tid && handler->rank) || (handler->tid == num_threads-1 && handler->rank < num_procs-1));
-  int flags[3];           /* If my top, bottom, or central rows have been completed */
-  int index;
-  int send_position = 0, recv_position = 0; 
-  int neighbour = 0, tag = 0;
-  
-  MPI_Request request[2];
-  long_long total_wait_time_cond = 0;
-  long_long total_wait_time_mpi = 0;
-  long_long t;
+  /* If my top, bottom, or central rows have been completed */
+  int completed[3];
+  int neighbour = 0;
+  uint8_t mpi_needed = (num_procs > 1) && ((!handler->tid && handler->rank) || (handler->tid == num_threads-1 && handler->rank < num_procs-1));
+  uint8_t index;
+  uint send_position = 0, recv_position = 0; 
+  MPI_Request request;
+
+  long_long t, total_wait_time = 0;
   long_long time_start = PAPI_get_real_usec();
 
   /* Starting convolution with top and bottom rows */
@@ -280,64 +283,31 @@ void* worker_thread(void* args){
       neighbour = handler->rank + 1;
     }
     pthread_mutex_lock(&mutex_mpi);
-    MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, tag, 
-                  &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, tag, MPI_COMM_WORLD, &request[0]);
+    MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, 
+                  &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request);
     pthread_mutex_unlock(&mutex_mpi);
   }
 
   conv_subgrid(my_old_grid, my_grid, (handler->start + pad_size), (handler->end - pad_size));
 
-  for(int iter = 1; iter < num_iterations; iter++) {
+  for(uint8_t iter = 1; iter < num_iterations; iter++) {
     temp = my_old_grid;
     my_old_grid = my_grid;
     my_grid = temp;
     index = (iter-1) % 2;
-    memset(flags, 0, sizeof(int) * 3);
+    memset(completed, 0, sizeof(int) * 3);
 
-    while(!flags[0] || !flags[1] || !flags[2]) {
-      /* Top rows */
-      if(!flags[0]) {
-        if(handler->tid == 0 && mpi_needed) {
-          /* If current thread has to send top rows through MPI runtime */
-          pthread_mutex_lock(&mutex_mpi);
-          MPI_Test(&request[0], &flags[0], MPI_STATUS_IGNORE);
-          if(!flags[0] && flags[1] && flags[2]) {
-            t = PAPI_get_real_usec();
-            MPI_Wait(&request[0], MPI_STATUS_IGNORE);
-            total_wait_time_mpi += (PAPI_get_real_usec() - t); 
-            flags[0] = 1;
-          }
-          pthread_mutex_unlock(&mutex_mpi);
-        } 
-        else if (handler->top == NULL) {
-          /* If current thread is the "highest" (no dependency with upper thread) */
-          flags[0] = 1;
-        }
-        else {
-          /* If current thread has a shared memory dependency with upper thread */
-          pthread_mutex_lock(&(handler->top->mutex));
-          flags[0] = handler->top->bot_rows_done[index];
-          if(flags[0]) 
-            handler->top->bot_rows_done[index] = 0;
-          else if(flags[1] && flags[2]) {
-            t = PAPI_get_real_usec();
-            while(handler->top->bot_rows_done[index] == 0) {
-              pthread_cond_wait(&(handler->top->pad_ready), &(handler->top->mutex));
-            }
-            total_wait_time_cond += PAPI_get_real_usec() - t;
-            handler->top->bot_rows_done[index] = 0;
-            flags[0] = 1;
-          }
-          pthread_mutex_unlock(&(handler->top->mutex));
-        }
+    while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
+      if(!completed[TOP]) {
+        update_log(TOP, mpi_needed, index, completed, &request, handler, &total_wait_time);
 
-        if(flags[0]) {
+        if(completed[TOP]) {
           conv_subgrid(my_old_grid, my_grid, handler->start, (handler->start + pad_size));
           if(iter+1 < num_iterations) {
             if(handler->tid == 0 && mpi_needed) {
               pthread_mutex_lock(&mutex_mpi);
-              MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, tag, 
-                            &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, tag, MPI_COMM_WORLD, &request[0]);
+              MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, 
+                            &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request);
               pthread_mutex_unlock(&mutex_mpi);
             } else {
               pthread_mutex_lock(&(handler->mutex));
@@ -349,49 +319,16 @@ void* worker_thread(void* args){
         }
       }
 
-      /* Bottom rows */
-      if(!flags[1]) {
-        if(handler->tid == num_threads-1 && mpi_needed) {
-          /* If current thread has to send top rows through MPI runtime */
-          pthread_mutex_lock(&mutex_mpi);
-          MPI_Test(&request[0], &flags[1], MPI_STATUS_IGNORE);
-          if(!flags[1] && flags[0] && flags[2]) {
-            t = PAPI_get_real_usec();
-            MPI_Wait(&request[0], MPI_STATUS_IGNORE);
-            total_wait_time_mpi += (PAPI_get_real_usec() - t);
-            flags[1] = 1;
-          }
-          pthread_mutex_unlock(&mutex_mpi);
-        } 
-        else if (handler->bottom == NULL) {
-          /* If current thread is the "highest" (no dependency with upper thread) */
-          flags[1] = 1;
-        } 
-        else {
-          /* If current thread has a shared memory dependency with upper thread */
-          pthread_mutex_lock(&(handler->bottom->mutex));
-          flags[1] = handler->bottom->top_rows_done[index];
-          if(flags[1]) 
-            handler->bottom->top_rows_done[index] = 0;
-          else if(flags[0] && flags[2]) {
-            t = PAPI_get_real_usec();
-            while(handler->bottom->top_rows_done[index] == 0) {
-              pthread_cond_wait(&(handler->bottom->pad_ready), &(handler->bottom->mutex));
-            }
-            total_wait_time_cond += PAPI_get_real_usec() - t;
-            handler->bottom->top_rows_done[index] = 0;
-            flags[1] = 1;
-          }
-          pthread_mutex_unlock(&(handler->bottom->mutex));
-        }
+      if(!completed[BOTTOM]) {
+        update_log(BOTTOM, mpi_needed, index, completed, &request, handler, &total_wait_time);
 
-        if(flags[1]) {
+        if(completed[BOTTOM]) {
           conv_subgrid(my_old_grid, my_grid, (handler->end - pad_size), handler->end);
           if(iter+1 < num_iterations) {
             if(handler->tid == num_threads-1 && mpi_needed) {
               pthread_mutex_lock(&mutex_mpi);
-              MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, tag, 
-                            &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, tag, MPI_COMM_WORLD, &request[0]);
+              MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, 
+                            &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request);
               pthread_mutex_unlock(&mutex_mpi);
             } else {
               pthread_mutex_lock(&(handler->mutex));
@@ -404,16 +341,74 @@ void* worker_thread(void* args){
       }
 
       /* Checking for central rows */
-      if(!flags[2]) {
+      if(!completed[CENTER]) {
         conv_subgrid(my_old_grid, my_grid, (handler->start + pad_size), (handler->end - pad_size));
-        flags[2] = 1;
+        completed[CENTER] = 1;
       }
     }
   }
 
   t = PAPI_get_real_usec();
-  printf("Thread[%d][%d]: Elapsed time: %llu | Cond. wait time: %llu | MPI_Wait time: %llu\n", handler->rank, handler->tid, (t - time_start), total_wait_time_cond, total_wait_time_mpi);
+  printf("Thread[%d][%d]: Elapsed time: %llu | Total wait time: %llu\n", handler->rank, handler->tid, (t - time_start), total_wait_time);
   pthread_exit(0);
+}
+
+void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* completed, MPI_Request* request, struct thread_handler* handler, long_long* elapsed) {
+  int tid;
+  uint8_t* rows_done;
+  struct thread_handler* neigh_handler;
+
+  switch(position) {
+    case TOP:
+      tid = 0;
+      neigh_handler = handler->top;
+      if(neigh_handler == NULL) break;
+      rows_done = handler->top->bot_rows_done;
+      break;
+
+    case BOTTOM:
+      tid = num_threads-1;
+      neigh_handler = handler->bottom;
+      if(neigh_handler == NULL) break;
+      rows_done = handler->bottom->top_rows_done;
+      break;
+
+    default:
+      return;
+  }
+
+  long_long t;
+  if(handler->tid == tid && mpi_needed) {
+    /* If current thread has distributed memory dependency */
+    pthread_mutex_lock(&mutex_mpi);
+    MPI_Test(request, &completed[position], MPI_STATUS_IGNORE);
+    if(!completed[position] && completed[!position] && completed[2]) {
+      t = PAPI_get_real_usec();
+      MPI_Wait(request, MPI_STATUS_IGNORE);
+      *elapsed += (PAPI_get_real_usec() - t); 
+      completed[position] = 1;
+    }
+    pthread_mutex_unlock(&mutex_mpi);
+  } else if(neigh_handler == NULL) {
+    /* If current thread is the "highest" or the "lowest" (no dependency with upper or lower thread) */  
+    completed[position] = 1;
+  } else {
+    /* If current thread has a shared memory dependency with upper or lower thread */
+    pthread_mutex_lock(&(neigh_handler->mutex));
+    completed[position] = rows_done[index];
+    if(completed[position]) 
+      rows_done[index] = 0;
+    else if(completed[!position] && completed[2]) {
+      t = PAPI_get_real_usec();
+      while(rows_done[index] == 0) {
+        pthread_cond_wait(&(neigh_handler->pad_ready), &(neigh_handler->mutex));
+      }
+      *elapsed += PAPI_get_real_usec() - t;
+      rows_done[index] = 0;
+      completed[position] = 1;
+    }
+    pthread_mutex_unlock(&(neigh_handler->mutex));
+  }
 }
 
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {

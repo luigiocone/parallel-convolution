@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
   assert(num_iterations > 0 && num_threads > 0);
-  pthread_t threads[num_threads];
+  pthread_t threads[num_threads-1];
   
   /* MPI setup */
   if((rc = MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided)) != MPI_SUCCESS) {
@@ -170,7 +170,17 @@ int main(int argc, char** argv) {
   pthread_mutex_init(&mutex_mpi, NULL);
   /* PThreads creation (every thread starts with a default job) */
   struct thread_handler* handlers = malloc(sizeof(struct thread_handler) * (num_threads));
-  for(int i = 0; i < num_threads; i++) {
+  handlers[0].tid = 0;
+  handlers[0].rank = rank;
+  handlers[0].top_rows_done[0] = 0;
+  handlers[0].top_rows_done[1] = 0;
+  handlers[0].bot_rows_done[0] = 0;
+  handlers[0].bot_rows_done[1] = 0;
+  handlers[0].top = NULL;
+  handlers[0].bottom = &handlers[1];
+  pthread_mutex_init(&handlers[0].mutex, NULL);
+  pthread_cond_init(&handlers[0].pad_ready, NULL);
+  for(int i = 1; i < num_threads; i++) {
     handlers[i].tid = i;
     handlers[i].rank = rank;
     handlers[i].top_rows_done[0] = 0;
@@ -182,17 +192,18 @@ int main(int argc, char** argv) {
     pthread_mutex_init(&handlers[i].mutex, NULL);
     pthread_cond_init(&handlers[i].pad_ready, NULL);
     
-    rc = pthread_create(&threads[i], NULL, worker_thread, (void *)&handlers[i]);
+    rc = pthread_create(&threads[i-1], NULL, worker_thread, (void *)&handlers[i]);
     if (rc) { 
       fprintf(stderr, "Error while creating pthread[%d]; Return code: %d\n", i, rc);
       exit(-1);
     }
   }
+  worker_thread((void *)&handlers[0]);
 
   /* Wait workers termination */
   void* ret;
-  for(int i = 0; i < num_threads; i++) {
-    if(pthread_join(threads[i], &ret)) 
+  for(int i = 1; i < num_threads; i++) {
+    if(pthread_join(threads[i-1], &ret)) 
       fprintf(stderr, "Join error, thread[%d] exited with: %d", i, *((int*)ret));
   }
 
@@ -252,6 +263,7 @@ void* worker_thread(void* args){
   
   /* If my top, bottom, or central rows have been completed */
   int completed[3];
+  int central_start;
   int neighbour = 0;
   uint8_t mpi_needed = (num_procs > 1) && ((!handler->tid && handler->rank) || (handler->tid == num_threads-1 && handler->rank < num_procs-1));
   uint8_t index;
@@ -295,6 +307,7 @@ void* worker_thread(void* args){
     my_old_grid = my_grid;
     my_grid = temp;
     index = (iter-1) % 2;
+    central_start = handler->start + pad_size;
     memset(completed, 0, sizeof(int) * 3);
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
@@ -340,17 +353,28 @@ void* worker_thread(void* args){
         }
       }
 
-      /* Checking for central rows */
+      /* Computing central rows one at a time if top and bottom rows are incomplete */
       if(!completed[CENTER]) {
-        conv_subgrid(my_old_grid, my_grid, (handler->start + pad_size), (handler->end - pad_size));
-        completed[CENTER] = 1;
+        int central_end; 
+        if (completed[TOP] && completed[BOTTOM]) {
+          central_end = handler->end - pad_size;
+          completed[CENTER] = 1;
+        } else {
+          central_end = central_start + grid_width;
+          if(central_end == handler->end - pad_size)
+            completed[CENTER] = 1;
+          else 
+            central_start += grid_width;
+        }
+        conv_subgrid(my_old_grid, my_grid, central_start, central_end);
       }
     }
   }
 
   t = PAPI_get_real_usec();
   printf("Thread[%d][%d]: Elapsed time: %llu | Total wait time: %llu\n", handler->rank, handler->tid, (t - time_start), total_wait_time);
-  pthread_exit(0);
+  if(handler->tid) pthread_exit(0);
+  else return 0;
 }
 
 void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* completed, MPI_Request* request, struct thread_handler* handler, long_long* elapsed) {
@@ -459,10 +483,8 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       }
     }
 
-    /* Normalization */
-    result = result / sqrt(matrix_dot_sum * kern_dot_sum);
-    /* Resolution problem if too many convolution iteration are done. The mean value is returned */
-    new_grid[i] = isnan(result) ? 0 : result;
+    /* Normalization (avoid NaN results by assigning the mean value 0 if needed) */
+    new_grid[i] = (!matrix_dot_sum) ? 0 : (result / sqrt(matrix_dot_sum * kern_dot_sum));
 
     /* Setting row and col index for next element */
     if (col != grid_width-1)

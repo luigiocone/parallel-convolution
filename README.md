@@ -35,7 +35,7 @@ make && ./run.sh
 If source matrix is an image, source and result images could be plot with python:
 ```
 cd io-files
-python image.py
+python3 image.py
 ```
 The following image is an output example. Left image is the source matrix, the right image has been computed (after one convolution iteration) using a _ridge detection kernel_.
 ![Ridge detection (normalized)](https://github.com/luigiocone/Parallel-Convolution-MPI/blob/master/docs/img/ridge_detection_camera_normalization.png?raw=true)

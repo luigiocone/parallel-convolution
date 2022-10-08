@@ -241,6 +241,13 @@ int main(int argc, char** argv) {
     fclose(fp_result);
   }
 
+  /* Destroy pthread objects */
+  pthread_mutex_destroy(&mutex_mpi);
+  for(int i = 0; i < num_threads; i++) {
+    pthread_mutex_destroy(&handlers[i].mutex);
+    pthread_cond_destroy(&handlers[i].pad_ready);
+  }
+
   MPI_Barrier(MPI_COMM_WORLD);
   MPI_Finalize();
   free(write_buffer);
@@ -266,14 +273,14 @@ void* worker_thread(void* args){
   int central_start;
   int neighbour = 0;
   uint8_t mpi_needed = (num_procs > 1) && ((!handler->tid && handler->rank) || (handler->tid == num_threads-1 && handler->rank < num_procs-1));
-  uint8_t index;
+  uint8_t prev_iter_index;
   uint send_position = 0, recv_position = 0; 
-  MPI_Request request;
+  MPI_Request request[3];     /* There are at most two "Isend" and one "Irecv" not completed at the same time */
 
   long_long t, total_wait_time = 0;
   long_long time_start = PAPI_get_real_usec();
 
-  /* Starting convolution with top and bottom rows */
+  /* First convolution iteration (starting with top and bottom rows) */
   conv_subgrid(my_old_grid, my_grid, handler->start, (handler->start + pad_size));
   conv_subgrid(my_old_grid, my_grid, (handler->end - pad_size), handler->end);
 
@@ -295,36 +302,38 @@ void* worker_thread(void* args){
       neighbour = handler->rank + 1;
     }
     pthread_mutex_lock(&mutex_mpi);
-    MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, 
-                  &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request);
+    MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[0]);
+    MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
     pthread_mutex_unlock(&mutex_mpi);
   }
 
   conv_subgrid(my_old_grid, my_grid, (handler->start + pad_size), (handler->end - pad_size));
 
+  /* Second or higher convolution iterations */
   for(uint8_t iter = 1; iter < num_iterations; iter++) {
     temp = my_old_grid;
     my_old_grid = my_grid;
     my_grid = temp;
-    index = (iter-1) % 2;
+    prev_iter_index = (iter-1) % 2;
     central_start = handler->start + pad_size;
     memset(completed, 0, sizeof(int) * 3);
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
       if(!completed[TOP]) {
-        update_log(TOP, mpi_needed, index, completed, &request, handler, &total_wait_time);
+        update_log(TOP, mpi_needed, prev_iter_index, completed, &request[2], handler, &total_wait_time);
 
         if(completed[TOP]) {
           conv_subgrid(my_old_grid, my_grid, handler->start, (handler->start + pad_size));
           if(iter+1 < num_iterations) {
             if(handler->tid == 0 && mpi_needed) {
               pthread_mutex_lock(&mutex_mpi);
-              MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, 
-                            &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request);
+              MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
+              MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[iter % 2]);
+              MPI_Wait(&request[prev_iter_index], MPI_STATUS_IGNORE);   /* Avoid to overwrite data of previous Isend with next convolution */
               pthread_mutex_unlock(&mutex_mpi);
             } else {
               pthread_mutex_lock(&(handler->mutex));
-              handler->top_rows_done[(index+1) % 2] = 1;
+              handler->top_rows_done[iter % 2] = 1;
               pthread_cond_broadcast(&(handler->pad_ready));
               pthread_mutex_unlock(&(handler->mutex));
             }
@@ -333,19 +342,20 @@ void* worker_thread(void* args){
       }
 
       if(!completed[BOTTOM]) {
-        update_log(BOTTOM, mpi_needed, index, completed, &request, handler, &total_wait_time);
+        update_log(BOTTOM, mpi_needed, prev_iter_index, completed, &request[2], handler, &total_wait_time);
 
         if(completed[BOTTOM]) {
           conv_subgrid(my_old_grid, my_grid, (handler->end - pad_size), handler->end);
           if(iter+1 < num_iterations) {
             if(handler->tid == num_threads-1 && mpi_needed) {
               pthread_mutex_lock(&mutex_mpi);
-              MPI_Isendrecv(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, 
-                            &my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request);
+              MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
+              MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[iter % 2]);
+              MPI_Wait(&request[prev_iter_index], MPI_STATUS_IGNORE);   /* Avoid to overwrite data of previous Isend with next convolution */
               pthread_mutex_unlock(&mutex_mpi);
             } else {
               pthread_mutex_lock(&(handler->mutex));
-              handler->bot_rows_done[(index+1) % 2] = 1;
+              handler->bot_rows_done[iter % 2] = 1;
               pthread_cond_broadcast(&(handler->pad_ready));
               pthread_mutex_unlock(&(handler->mutex));
             }
@@ -355,24 +365,24 @@ void* worker_thread(void* args){
 
       /* Computing central rows one at a time if top and bottom rows are incomplete */
       if(!completed[CENTER]) {
-        int central_end; 
+        int central_end;
         if (completed[TOP] && completed[BOTTOM]) {
           central_end = handler->end - pad_size;
           completed[CENTER] = 1;
         } else {
           central_end = central_start + grid_width;
-          if(central_end == handler->end - pad_size)
-            completed[CENTER] = 1;
-          else 
-            central_start += grid_width;
         }
+
         conv_subgrid(my_old_grid, my_grid, central_start, central_end);
+
+        if(central_end == (handler->end - pad_size)) completed[CENTER] = 1;
+        else central_start += grid_width;
       }
     }
   }
 
   t = PAPI_get_real_usec();
-  printf("Thread[%d][%d]: Elapsed time: %llu | Total wait time: %llu\n", handler->rank, handler->tid, (t - time_start), total_wait_time);
+  printf("Thread[%d][%d]: Elapsed time: %llu | Total cond. wait time: %llu\n", handler->rank, handler->tid, (t - time_start), total_wait_time);
   if(handler->tid) pthread_exit(0);
   else return 0;
 }
@@ -406,10 +416,9 @@ void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* comple
     /* If current thread has distributed memory dependency */
     pthread_mutex_lock(&mutex_mpi);
     MPI_Test(request, &completed[position], MPI_STATUS_IGNORE);
-    if(!completed[position] && completed[!position] && completed[2]) {
-      t = PAPI_get_real_usec();
+    if(!completed[position] && completed[!position] && completed[CENTER]) {
+      //MPI_Waitany(1, &request)
       MPI_Wait(request, MPI_STATUS_IGNORE);
-      *elapsed += (PAPI_get_real_usec() - t); 
       completed[position] = 1;
     }
     pthread_mutex_unlock(&mutex_mpi);
@@ -422,7 +431,7 @@ void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* comple
     completed[position] = rows_done[index];
     if(completed[position]) 
       rows_done[index] = 0;
-    else if(completed[!position] && completed[2]) {
+    else if(completed[!position] && completed[CENTER]) {
       t = PAPI_get_real_usec();
       while(rows_done[index] == 0) {
         pthread_cond_wait(&(neigh_handler->pad_ready), &(neigh_handler->mutex));

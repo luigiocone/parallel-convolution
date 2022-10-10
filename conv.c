@@ -11,7 +11,6 @@
 #include <papi.h>
 #include <mpi.h>
 #include <pthread.h>
-#include <unistd.h>
 
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_THREADS 2
@@ -19,6 +18,7 @@
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13     /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
+#define NSEC_WAIT (15*1000)
 #define TOP 0
 #define BOTTOM 1
 #define CENTER 2
@@ -35,7 +35,7 @@ struct thread_handler {
 };
 
 void* worker_thread(void*);
-void update_log(uint8_t, uint8_t, uint8_t, int*, MPI_Request*, struct thread_handler*, long_long*);
+void update_log(uint8_t, uint8_t, uint8_t, int*, int*, MPI_Request*, struct thread_handler*, long_long*);
 void conv_subgrid(float*, float*, int, int);
 void init_read(FILE*, FILE*);
 void read_data(FILE*, float*, int);
@@ -63,7 +63,7 @@ float kern_dot_sum;           /* Used for normalization, its value is equal to: 
 float *kernel;                /* Kernel buffer */
 float *grid;                  /* Grid buffer */
 float *old_grid;              /* Old grid buffer */
-
+const struct timespec WAIT_TIME = {.tv_sec = 0, .tv_nsec = NSEC_WAIT};
 
 int main(int argc, char** argv) {
   int rank;                               /* Current process identifier */
@@ -267,16 +267,19 @@ void* worker_thread(void* args){
   float *my_old_grid = old_grid;
   float *my_grid = grid;
   float *temp;
-  
-  /* If my top, bottom, or central rows have been completed */
-  int completed[3];
+
+  int completed[3];           /* If my top, bottom, or central rows have been completed */
   int central_start;
   int neighbour = 0;
   uint8_t mpi_needed = (num_procs > 1) && ((!handler->tid && handler->rank) || (handler->tid == num_threads-1 && handler->rank < num_procs-1));
   uint8_t prev_iter_index;
   uint send_position = 0, recv_position = 0; 
-  MPI_Request request[3];     /* There are at most two "Isend" and one "Irecv" not completed at the same time */
 
+  /* There are at most two "Isend" and one "Irecv" not completed at the same time */
+  MPI_Request request[3];
+  request[1] = MPI_REQUEST_NULL;
+  int requests_completed[3] = {0, 0, 0};
+  
   long_long t, total_wait_time = 0;
   long_long time_start = PAPI_get_real_usec();
 
@@ -308,19 +311,20 @@ void* worker_thread(void* args){
   }
 
   conv_subgrid(my_old_grid, my_grid, (handler->start + pad_size), (handler->end - pad_size));
-
   /* Second or higher convolution iterations */
   for(uint8_t iter = 1; iter < num_iterations; iter++) {
     temp = my_old_grid;
     my_old_grid = my_grid;
     my_grid = temp;
     prev_iter_index = (iter-1) % 2;
+    requests_completed[prev_iter_index] = 0;
+    requests_completed[2] = 0;
     central_start = handler->start + pad_size;
     memset(completed, 0, sizeof(int) * 3);
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
       if(!completed[TOP]) {
-        update_log(TOP, mpi_needed, prev_iter_index, completed, &request[2], handler, &total_wait_time);
+        update_log(TOP, mpi_needed, prev_iter_index, completed, requests_completed, request, handler, &total_wait_time);
 
         if(completed[TOP]) {
           conv_subgrid(my_old_grid, my_grid, handler->start, (handler->start + pad_size));
@@ -329,7 +333,8 @@ void* worker_thread(void* args){
               pthread_mutex_lock(&mutex_mpi);
               MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
               MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[iter % 2]);
-              MPI_Wait(&request[prev_iter_index], MPI_STATUS_IGNORE);   /* Avoid to overwrite data of previous Isend with next convolution */
+              /* Avoid to overwrite data of previous Isend with next convolution */
+              MPI_Test(&request[prev_iter_index], &requests_completed[prev_iter_index], MPI_STATUS_IGNORE);
               pthread_mutex_unlock(&mutex_mpi);
             } else {
               pthread_mutex_lock(&(handler->mutex));
@@ -342,16 +347,17 @@ void* worker_thread(void* args){
       }
 
       if(!completed[BOTTOM]) {
-        update_log(BOTTOM, mpi_needed, prev_iter_index, completed, &request[2], handler, &total_wait_time);
+        update_log(BOTTOM, mpi_needed, prev_iter_index, completed, requests_completed, request, handler, &total_wait_time);
 
         if(completed[BOTTOM]) {
           conv_subgrid(my_old_grid, my_grid, (handler->end - pad_size), handler->end);
           if(iter+1 < num_iterations) {
             if(handler->tid == num_threads-1 && mpi_needed) {
               pthread_mutex_lock(&mutex_mpi);
-              MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
               MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[iter % 2]);
-              MPI_Wait(&request[prev_iter_index], MPI_STATUS_IGNORE);   /* Avoid to overwrite data of previous Isend with next convolution */
+              MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
+              /* Avoid to overwrite data of previous Isend with next convolution */
+              MPI_Test(&request[prev_iter_index], &requests_completed[prev_iter_index], MPI_STATUS_IGNORE);
               pthread_mutex_unlock(&mutex_mpi);
             } else {
               pthread_mutex_lock(&(handler->mutex));
@@ -387,10 +393,11 @@ void* worker_thread(void* args){
   else return 0;
 }
 
-void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* completed, MPI_Request* request, struct thread_handler* handler, long_long* elapsed) {
+void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* completed, int* requests_completed, MPI_Request* request, struct thread_handler* handler, long_long* elapsed) {
   int tid;
   uint8_t* rows_done;
   struct thread_handler* neigh_handler;
+  struct timespec remaining;
 
   switch(position) {
     case TOP:
@@ -411,17 +418,31 @@ void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* comple
       return;
   }
 
-  long_long t;
+  long_long time_start;
   if(handler->tid == tid && mpi_needed) {
     /* If current thread has distributed memory dependency */
+    int outcount;
+    int indexes[3] = {0, 0, 0};
+    MPI_Status statuses[3];
+
     pthread_mutex_lock(&mutex_mpi);
-    MPI_Test(request, &completed[position], MPI_STATUS_IGNORE);
-    if(!completed[position] && completed[!position] && completed[CENTER]) {
-      //MPI_Waitany(1, &request)
-      MPI_Wait(request, MPI_STATUS_IGNORE);
-      completed[position] = 1;
-    }
+    MPI_Testsome(3, request, &outcount, indexes, statuses);
     pthread_mutex_unlock(&mutex_mpi);
+    for(int i = 0; i < outcount; i++) requests_completed[indexes[i]] = 1;
+    if(requests_completed[index] && requests_completed[2]) completed[position] = 1;
+
+    if(!completed[position] && completed[!position] && completed[CENTER]) {
+      while(!completed[position]) {
+        time_start = PAPI_get_real_usec();
+        nanosleep(&WAIT_TIME, &remaining);
+        *elapsed += PAPI_get_real_usec() - time_start;
+        pthread_mutex_lock(&mutex_mpi);
+        MPI_Testsome(3, request, &outcount, indexes, statuses);
+        pthread_mutex_unlock(&mutex_mpi);
+        for(int i = 0; i < outcount; i++) requests_completed[indexes[i]] = 1;
+        if(requests_completed[index] && requests_completed[2]) completed[position] = 1;
+      }
+    }
   } else if(neigh_handler == NULL) {
     /* If current thread is the "highest" or the "lowest" (no dependency with upper or lower thread) */  
     completed[position] = 1;
@@ -432,11 +453,11 @@ void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* comple
     if(completed[position]) 
       rows_done[index] = 0;
     else if(completed[!position] && completed[CENTER]) {
-      t = PAPI_get_real_usec();
+      time_start = PAPI_get_real_usec();
       while(rows_done[index] == 0) {
         pthread_cond_wait(&(neigh_handler->pad_ready), &(neigh_handler->mutex));
       }
-      *elapsed += PAPI_get_real_usec() - t;
+      *elapsed += PAPI_get_real_usec() - time_start;
       rows_done[index] = 0;
       completed[position] = 1;
     }

@@ -2,7 +2,7 @@
 
 if [ $# = 0 ]; then
     mpirun -np 4 ./conv 2
-    exit 0
+    exit $?
 fi
 
 WORKSPACE="/home/ocone/convolution"

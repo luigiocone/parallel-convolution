@@ -69,17 +69,18 @@ int main(int argc, char** argv) {
   int rank;                               /* Current process identifier */
   int provided;                           /* MPI thread level supported */
   int rc;                                 /* Return code used in error handling */
-  int event_set = PAPI_NULL;              /* Group of hardware events for PAPI library */
   long_long time_start, time_stop;        /* To measure execution time */
-  long_long num_cache_miss;               /* To measure number of cache misses */
   FILE *fp_grid, *fp_kernel;              /* I/O files for grid and kernel matrices */
-
   /* How many times do the convolution operation and number of additional threads */
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
   assert(num_iterations > 0 && num_threads > 0);
   pthread_t threads[num_threads-1];
-  
+
+  /* PAPI setup */
+  if((rc = PAPI_library_init(PAPI_VER_CURRENT)) != PAPI_VER_CURRENT)
+    handle_PAPI_error(rc, "Error in library init.");
+
   /* MPI setup */
   if((rc = MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided)) != MPI_SUCCESS) {
     fprintf(stderr, "MPI_Init error. Return code: %d\n", rc);
@@ -94,16 +95,6 @@ int main(int argc, char** argv) {
   int size = (num_procs < 4) ? 4 : 4 + num_procs-1;
   MPI_Status status[size];
   MPI_Request req[size];
-
-  /* PAPI setup */
-  if((rc = PAPI_library_init(PAPI_VER_CURRENT)) != PAPI_VER_CURRENT)
-    handle_PAPI_error(rc, "Error in library init.");
-  if((rc = PAPI_create_eventset(&event_set)) != PAPI_OK)
-    handle_PAPI_error(rc, "Error while creating the PAPI eventset.");
-  if((rc = PAPI_add_event(event_set, PAPI_L2_TCM)) != PAPI_OK)
-    handle_PAPI_error(rc, "Error while adding L2 total cache miss event.");
-  if((rc = PAPI_start(event_set)) != PAPI_OK) 
-    handle_PAPI_error(rc, "Error in PAPI_start().");
 
   fp_grid = NULL;
   if(!rank) {
@@ -223,10 +214,10 @@ int main(int argc, char** argv) {
   time_stop = PAPI_get_real_usec();
   printf("Rank[%d] | Elapsed time: %lld us\n", rank, (time_stop - time_start));
 
-  /* Stop the count! */ 
+  /* Stop the count! 
   if ((rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
     handle_PAPI_error(rc, "Error in PAPI_stop().");
-  printf("Rank[%d] | Total L2 cache misses:%lld\n", rank, num_cache_miss);
+  printf("Rank[%d] | Total L2 cache misses:%lld\n", rank, num_cache_miss);*/ 
   
   /* Store computed matrix */
   if (!rank) {
@@ -279,7 +270,18 @@ void* worker_thread(void* args){
   MPI_Request request[3];
   request[1] = MPI_REQUEST_NULL;
   int requests_completed[3] = {0, 0, 0};
-  
+
+  /* PAPI setup */
+  int rc, event_set = PAPI_NULL;
+  if((rc = PAPI_thread_init(pthread_self)) != PAPI_OK)
+    handle_PAPI_error(rc, "Error in PAPI thread init.");
+  if((rc = PAPI_create_eventset(&event_set)) != PAPI_OK)
+    handle_PAPI_error(rc, "Error while creating the PAPI eventset.");
+  if((rc = PAPI_add_event(event_set, PAPI_L2_TCM)) != PAPI_OK)
+    handle_PAPI_error(rc, "Error while adding L2 total cache miss event.");
+  if((rc = PAPI_start(event_set)) != PAPI_OK) 
+    handle_PAPI_error(rc, "Error in PAPI_start().");
+
   long_long t, total_wait_time = 0;
   long_long time_start = PAPI_get_real_usec();
 
@@ -387,8 +389,13 @@ void* worker_thread(void* args){
     }
   }
 
+  /* Retrieving execution info */
   t = PAPI_get_real_usec();
-  printf("Thread[%d][%d]: Elapsed time: %llu | Total cond. wait time: %llu\n", handler->rank, handler->tid, (t - time_start), total_wait_time);
+  long_long num_cache_miss;
+  if ((rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
+    handle_PAPI_error(rc, "Error in PAPI_stop().");
+  printf("Thread[%d][%d]: Elapsed time: %llu | Total cond. wait time: %llu | Total L2 cache misses: %lld\n", handler->rank, handler->tid, (t - time_start), total_wait_time, num_cache_miss);
+
   if(handler->tid) pthread_exit(0);
   else return 0;
 }

@@ -2,10 +2,10 @@
 // Name: Tanay Agarwal, Nirmal Krishnan
 // JHED: tagarwa2, nkrishn9
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <assert.h>
 #include <string.h>
 #include <math.h>
 #include <papi.h>
@@ -18,16 +18,16 @@
 #define KERNEL_FILE_PATH "./io-files/kernel.txt"
 #define RESULT_FILE_PATH "./io-files/result.txt"
 #define MAX_CHARS 13     /* Standard "%e" format has at most this num of chars (e.g. -9.075626e+20) */
-#define NSEC_WAIT (15*1000)
+#define NSEC_WAIT (25*1000)
 #define TOP 0
 #define BOTTOM 1
 #define CENTER 2
 
 struct thread_handler {
-  int rank, tid;
-  uint start, end;
-  uint8_t top_rows_done[2];
-  uint8_t bot_rows_done[2];               /* Flags for current and next iteration */
+  int tid;                                /* Virtual thread ID, not the one returned by "pthread_self()"*/
+  uint start, end;                        /* Matrix area of ​​interest for this thread  */
+  uint8_t top_rows_done[2];               /* Flags for current and next iteration */
+  uint8_t bot_rows_done[2];
   struct thread_handler* top;             /* To exchange information about pads with neighbor threads */
   struct thread_handler* bottom;
   pthread_mutex_t mutex;                  /* Mutex to access this handler */
@@ -35,12 +35,13 @@ struct thread_handler {
 };
 
 void* worker_thread(void*);
-void update_log(uint8_t, uint8_t, uint8_t, int*, int*, MPI_Request*, struct thread_handler*, long_long*);
+void update_log(uint8_t, uint8_t, uint8_t, int*, int*, MPI_Request*, struct thread_handler*, long_long**);
 void conv_subgrid(float*, float*, int, int);
 void read_kernel(FILE*);
-void read_grid(FILE*, float*, int);
+void read_grid(FILE*, float*);
 void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
+int stick_this_thread_to_core(int);
 
 pthread_mutex_t mutex_mpi;    /* To call MPI routines (will be used only by top and bottom thread) */
 uint8_t num_pads;             /* Number of rows that should be shared with other processes */
@@ -52,8 +53,9 @@ uint16_t pad_size;            /* Number of elements in the pad section of the gr
 int rows_per_proc_size;       /* Number of elements assigned to a process */
 int rows_per_thread_size;     /* Number of elements assigned to a thread */
 int num_procs;                /* Number of MPI processes in the communicator */
-int num_threads;              /* Number of threads for every MPI process */
-int num_iterations;           /* Number of convolution operations */
+int num_threads;              /* Number of threads (main included) for every MPI process */
+int num_iterations;           /* Number of convolution iterations */
+int rank;                     /* MPI process identifier */
 float kern_dot_sum;           /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
 float *kernel;                /* Kernel buffer */
 float *grid;                  /* Grid buffer */
@@ -61,17 +63,25 @@ float *old_grid;              /* Old grid buffer */
 const struct timespec WAIT_TIME = {.tv_sec = 0, .tv_nsec = NSEC_WAIT};
 
 int main(int argc, char** argv) {
-  int rank;                               /* Current process identifier */
   int provided;                           /* MPI thread level supported */
   int rc;                                 /* Return code used in error handling */
   long_long time_start, time_stop;        /* To measure execution time */
   FILE *fp_grid, *fp_kernel;              /* I/O files for grid and kernel matrices */
 
-  /* How many times do the convolution operation and number of additional threads */
+  /* How many times do the convolution operation and total number of threads */
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
-  assert(num_iterations > 0 && num_threads > 0);
-  pthread_t threads[num_threads-1];
+  if(num_iterations <= 1) {
+    fprintf(stderr, "Invalid number of convolution iterations (first argument), value inserted: %d\n", num_iterations);
+    exit(-1);
+  }
+  if(num_threads < 1) {
+    fprintf(stderr, "Invalid number of threads (second argument), value inserted: %d\n", num_threads);
+    exit(-1);
+  }
+
+  /* Main thread + worker threads */
+  pthread_t threads[num_threads-1];       
 
   /* PAPI setup */
   if((rc = PAPI_library_init(PAPI_VER_CURRENT)) != PAPI_VER_CURRENT)
@@ -135,7 +145,14 @@ int main(int argc, char** argv) {
   grid_size = grid_width * grid_width;
   num_pads = (kern_width - 1) / 2;
   pad_size = grid_width * num_pads;
-  assert(grid_width % num_procs == 0);
+  if(grid_width % num_procs) {
+    fprintf(stderr, "Grid rows cannot be divided between processes. Grid rows: %d | Num. of process: %d\n", grid_width, num_procs);
+    exit(-1);
+  }
+  if(grid_width % num_threads) {
+    fprintf(stderr, "Grid rows cannot be divided between threads. Grid rows: %d | Num. of threads: %d\n", grid_width, num_threads);
+    exit(-1);
+  }
 
   const int rows_per_proc = grid_width / num_procs;             /* Number of rows assigned to current process */
   const int rows_per_thread = rows_per_proc / num_threads;
@@ -143,8 +160,8 @@ int main(int argc, char** argv) {
   rows_per_thread_size = rows_per_thread * grid_width;
 
   /* Read grid data */
-  grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
-  old_grid = malloc((rows_per_proc + num_pads*2) * grid_width * sizeof(float));
+  grid = malloc((rows_per_proc_size + pad_size*2) * sizeof(float));
+  old_grid = malloc((rows_per_proc_size + pad_size*2) * sizeof(float));
   float* whole_grid = NULL;
 
   /* Set lower and upper pad */
@@ -153,14 +170,14 @@ int main(int argc, char** argv) {
     memset(old_grid, 0, pad_size * sizeof(float));
   }
   if(rank == num_procs-1) {
-    memset(&grid[(rows_per_proc_size+pad_size)], 0, pad_size * sizeof(float));
-    memset(&old_grid[(rows_per_proc_size+pad_size)], 0, pad_size * sizeof(float));
+    memset(&grid[rows_per_proc_size+pad_size], 0, pad_size * sizeof(float));
+    memset(&old_grid[rows_per_proc_size+pad_size], 0, pad_size * sizeof(float));
   }
 
   /* Read or receive grid data */
   if(!rank){
     whole_grid = malloc(grid_size * sizeof(float));
-    read_grid(fp_grid, whole_grid, rows_per_proc);
+    read_grid(fp_grid, whole_grid);
 
     /* Exchange grid */
     int start, size;
@@ -178,7 +195,7 @@ int main(int argc, char** argv) {
     }
     memcpy(&old_grid[pad_size], whole_grid, size * sizeof(float));   /* Rank 0 */
 
-  } else if(num_procs > 1) {
+  } else {
     int recv_size = rows_per_proc_size + pad_size*2; 
     if(rank == num_procs-1) recv_size -= pad_size;
     MPI_Recv(old_grid, recv_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -196,7 +213,6 @@ int main(int argc, char** argv) {
   struct thread_handler* handlers = malloc(sizeof(struct thread_handler) * (num_threads));
   int last = num_threads-1;
   handlers[last].tid = last;
-  handlers[last].rank = rank;
   handlers[last].top_rows_done[0] = 0;
   handlers[last].top_rows_done[1] = 0;
   handlers[last].bot_rows_done[0] = 0;
@@ -207,7 +223,6 @@ int main(int argc, char** argv) {
   pthread_cond_init(&handlers[last].pad_ready, NULL);
   for(int i = 0; i < num_threads-1; i++) {
     handlers[i].tid = i;
-    handlers[i].rank = rank;
     handlers[i].top_rows_done[0] = 0;
     handlers[i].top_rows_done[1] = 0;
     handlers[i].bot_rows_done[0] = 0;
@@ -216,20 +231,19 @@ int main(int argc, char** argv) {
     handlers[i].bottom = (i < num_threads-1) ? &handlers[i+1] : NULL;
     pthread_mutex_init(&handlers[i].mutex, NULL);
     pthread_cond_init(&handlers[i].pad_ready, NULL);
-    
-    rc = pthread_create(&threads[i], NULL, worker_thread, (void *)&handlers[i]);
+
+    rc = pthread_create(&threads[i], NULL, worker_thread, (void*)&handlers[i]);
     if (rc) { 
       fprintf(stderr, "Error while creating pthread[%d]; Return code: %d\n", i, rc);
       exit(-1);
     }
   }
-  worker_thread((void *)&handlers[last]);
+  worker_thread((void*) &handlers[last]);
 
   /* Wait workers termination */
-  void* ret;
   for(int i = 0; i < num_threads-1; i++) {
-    if(pthread_join(threads[i], &ret)) 
-      fprintf(stderr, "Join error, thread[%d] exited with: %d", i, *((int*)ret));
+    if(pthread_join(threads[i], (void*) &rc)) 
+      fprintf(stderr, "Join error, thread[%d] exited with: %d", i, rc);
   }
 
   float *write_buffer = malloc(grid_size * sizeof(float) - grid_width * (grid_width / num_procs));
@@ -281,10 +295,15 @@ int main(int argc, char** argv) {
   exit(0);
 }
 
-void* worker_thread(void* args){
+void* worker_thread(void* args) {
   struct thread_handler *handler = (struct thread_handler*)args;
   handler->start = pad_size + handler->tid * rows_per_thread_size;
   handler->end = handler->start + rows_per_thread_size;
+
+  if(stick_this_thread_to_core(handler->tid)) {
+    fprintf(stderr, "Error occurred while setting thread affinity on core: %d\n", handler->tid);
+    exit(-1);
+  }
 
   float *my_old_grid = old_grid;
   float *my_grid = grid;
@@ -293,7 +312,7 @@ void* worker_thread(void* args){
   int completed[3];           /* If my top, bottom, or central rows have been completed */
   int central_start;
   int neighbour = 0;
-  uint8_t mpi_needed = (num_procs > 1) && ((!handler->tid && handler->rank) || (handler->tid == num_threads-1 && handler->rank < num_procs-1));
+  uint8_t mpi_needed = (num_procs > 1) && ((!handler->tid && rank) || (handler->tid == num_threads-1 && rank < num_procs-1));
   uint8_t prev_iter_index;
   uint send_position = 0, recv_position = 0; 
 
@@ -313,14 +332,17 @@ void* worker_thread(void* args){
   if((rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(rc, "Error in PAPI_start().");
 
-  long_long t, total_wait_time = 0;
+  long_long t, cond_wait_time = 0, handler_mutex_wait_time = 0, mpi_mutex_wait_time = 0;
   long_long time_start = PAPI_get_real_usec();
+  long_long* measures[3] = {&cond_wait_time, &handler_mutex_wait_time, &mpi_mutex_wait_time};
 
   /* First convolution iteration (starting with top and bottom rows) */
   conv_subgrid(my_old_grid, my_grid, handler->start, (handler->start + pad_size));
   conv_subgrid(my_old_grid, my_grid, (handler->end - pad_size), handler->end);
 
+  t = PAPI_get_real_usec();
   pthread_mutex_lock(&(handler->mutex));
+  handler_mutex_wait_time += PAPI_get_real_usec() - t;
   handler->top_rows_done[0] = 1;
   handler->bot_rows_done[0] = 1;
   pthread_cond_broadcast(&(handler->pad_ready));
@@ -331,13 +353,15 @@ void* worker_thread(void* args){
     if(handler->tid == 0) {
       send_position = handler->start;
       recv_position = 0;
-      neighbour = handler->rank - 1;
+      neighbour = rank - 1;
     } else {
       send_position = (handler->end - pad_size);
       recv_position = handler->end;
-      neighbour = handler->rank + 1;
+      neighbour = rank + 1;
     }
+    t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_mpi);
+    mpi_mutex_wait_time += PAPI_get_real_usec() - t;
     MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[0]);
     MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
     pthread_mutex_unlock(&mutex_mpi);
@@ -357,20 +381,24 @@ void* worker_thread(void* args){
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
       if(!completed[TOP]) {
-        update_log(TOP, mpi_needed, prev_iter_index, completed, requests_completed, request, handler, &total_wait_time);
+        update_log(TOP, mpi_needed, prev_iter_index, completed, requests_completed, request, handler, measures);
 
         if(completed[TOP]) {
           conv_subgrid(my_old_grid, my_grid, handler->start, (handler->start + pad_size));
           if(iter+1 < num_iterations) {
             if(handler->tid == 0 && mpi_needed) {
+              t = PAPI_get_real_usec();
               pthread_mutex_lock(&mutex_mpi);
+              mpi_mutex_wait_time += PAPI_get_real_usec() - t;
               MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
               MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[iter % 2]);
               /* Avoid to overwrite data of previous Isend with next convolution */
               MPI_Test(&request[prev_iter_index], &requests_completed[prev_iter_index], MPI_STATUS_IGNORE);
               pthread_mutex_unlock(&mutex_mpi);
             } else {
+              t = PAPI_get_real_usec();
               pthread_mutex_lock(&(handler->mutex));
+              handler_mutex_wait_time += PAPI_get_real_usec() - t;
               handler->top_rows_done[iter % 2] = 1;
               pthread_cond_broadcast(&(handler->pad_ready));
               pthread_mutex_unlock(&(handler->mutex));
@@ -380,20 +408,24 @@ void* worker_thread(void* args){
       }
 
       if(!completed[BOTTOM]) {
-        update_log(BOTTOM, mpi_needed, prev_iter_index, completed, requests_completed, request, handler, &total_wait_time);
+        update_log(BOTTOM, mpi_needed, prev_iter_index, completed, requests_completed, request, handler, measures);
 
         if(completed[BOTTOM]) {
           conv_subgrid(my_old_grid, my_grid, (handler->end - pad_size), handler->end);
           if(iter+1 < num_iterations) {
             if(handler->tid == num_threads-1 && mpi_needed) {
+              t = PAPI_get_real_usec();
               pthread_mutex_lock(&mutex_mpi);
+              mpi_mutex_wait_time += PAPI_get_real_usec() - t;
               MPI_Isend(&my_grid[send_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[iter % 2]);
               MPI_Irecv(&my_grid[recv_position], pad_size, MPI_FLOAT, neighbour, 0, MPI_COMM_WORLD, &request[2]);
               /* Avoid to overwrite data of previous Isend with next convolution */
               MPI_Test(&request[prev_iter_index], &requests_completed[prev_iter_index], MPI_STATUS_IGNORE);
               pthread_mutex_unlock(&mutex_mpi);
             } else {
+              t = PAPI_get_real_usec();
               pthread_mutex_lock(&(handler->mutex));
+              handler_mutex_wait_time += PAPI_get_real_usec() - t;
               handler->bot_rows_done[iter % 2] = 1;
               pthread_cond_broadcast(&(handler->pad_ready));
               pthread_mutex_unlock(&(handler->mutex));
@@ -425,17 +457,20 @@ void* worker_thread(void* args){
   long_long num_cache_miss;
   if ((rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
     handle_PAPI_error(rc, "Error in PAPI_stop().");
-  printf("Thread[%d][%d]: Elapsed time: %llu | Total cond. wait time: %llu | Total L2 cache misses: %lld\n", handler->rank, handler->tid, (t - time_start), total_wait_time, num_cache_miss);
+  
+  printf("Thread[%d][%d]: Elapsed: %llu | Condition WT: %llu | Handlers mutex WT: %llu | MPI mutex WT: %llu | Total L2 cache misses: %lld\n", 
+    rank, handler->tid, (t - time_start), cond_wait_time, handler_mutex_wait_time, mpi_mutex_wait_time, num_cache_miss);
 
   if(handler->tid != num_threads-1) pthread_exit(0);
   return 0; 
 }
 
-void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* completed, int* requests_completed, MPI_Request* request, struct thread_handler* handler, long_long* elapsed) {
+void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* completed, int* requests_completed, MPI_Request* request, struct thread_handler* handler, long_long** meas) {
   int tid;
   uint8_t* rows_done;
   struct thread_handler* neigh_handler;
   struct timespec remaining;
+  long_long *condition_wait_time = meas[0];
 
   switch(position) {
     case TOP:
@@ -456,14 +491,17 @@ void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* comple
       return;
   }
 
-  long_long time_start;
+  long_long t;
   if(handler->tid == tid && mpi_needed) {
     /* If current thread has distributed memory dependency */
     int outcount;
     int indexes[3] = {0, 0, 0};
     MPI_Status statuses[3];
+    long_long *mpi_mutex_wait_time = meas[2];
 
+    t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_mpi);
+    *mpi_mutex_wait_time += PAPI_get_real_usec() - t;
     MPI_Testsome(3, request, &outcount, indexes, statuses);
     pthread_mutex_unlock(&mutex_mpi);
     for(int i = 0; i < outcount; i++) requests_completed[indexes[i]] = 1;
@@ -471,11 +509,16 @@ void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* comple
 
     if(!completed[position] && completed[!position] && completed[CENTER]) {
       while(!completed[position]) {
-        time_start = PAPI_get_real_usec();
+        t = PAPI_get_real_usec();
         nanosleep(&WAIT_TIME, &remaining);
-        *elapsed += PAPI_get_real_usec() - time_start;
+        *condition_wait_time += PAPI_get_real_usec() - t;
+
+        t = PAPI_get_real_usec();
         pthread_mutex_lock(&mutex_mpi);
-        MPI_Testsome(3, request, &outcount, indexes, statuses);
+        *mpi_mutex_wait_time += PAPI_get_real_usec() - t;
+
+        //MPI_Testsome(3, request, &outcount, indexes, statuses);
+        MPI_Waitsome(3, request, &outcount, indexes, statuses);
         pthread_mutex_unlock(&mutex_mpi);
         for(int i = 0; i < outcount; i++) requests_completed[indexes[i]] = 1;
         if(requests_completed[index] && requests_completed[2]) completed[position] = 1;
@@ -486,16 +529,19 @@ void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* comple
     completed[position] = 1;
   } else {
     /* If current thread has a shared memory dependency with upper or lower thread */
+    long_long *handler_mutex_wait_time = meas[1];
+    t = PAPI_get_real_usec();
     pthread_mutex_lock(&(neigh_handler->mutex));
+    *handler_mutex_wait_time += PAPI_get_real_usec() - t;
     completed[position] = rows_done[index];
     if(completed[position]) 
       rows_done[index] = 0;
     else if(completed[!position] && completed[CENTER]) {
-      time_start = PAPI_get_real_usec();
-      while(rows_done[index] == 0) {
+      t = PAPI_get_real_usec();
+      while(!rows_done[index]) {
         pthread_cond_wait(&(neigh_handler->pad_ready), &(neigh_handler->mutex));
       }
-      *elapsed += PAPI_get_real_usec() - time_start;
+      *condition_wait_time += PAPI_get_real_usec() - t;
       rows_done[index] = 0;
       completed[position] = 1;
     }
@@ -594,7 +640,7 @@ void read_kernel(FILE *fp_kernel){
   free(buffer);
 }
 
-void read_grid(FILE *fp_grid, float* whole_grid, int rows_per_proc) {
+void read_grid(FILE *fp_grid, float* whole_grid) {
   /* Positive non-blank chars + Blank chars */
   const int grid_row_chars = (grid_width * MAX_CHARS + grid_width) * sizeof(char);
   int buffer_size = grid_row_chars * grid_width;
@@ -646,4 +692,16 @@ void handle_PAPI_error(int rc, char *msg) {
   fprintf(stderr, "%s\nReturn code: %d - PAPI error message:\n", msg, rc);
   PAPI_perror(error_str); PAPI_strerror(rc);
   exit(-1);
+}
+
+int stick_this_thread_to_core(int core_id) {
+   long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+   if(core_id < 0 || core_id >= num_cores)
+      return 1;
+
+   cpu_set_t cpuset;
+   CPU_ZERO(&cpuset);
+   CPU_SET(core_id, &cpuset);
+
+   return pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 }

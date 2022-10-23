@@ -42,25 +42,30 @@ void read_grid(FILE*, float*);
 void store_data(FILE*, float*, int);
 void handle_PAPI_error(int, char*);
 int stick_this_thread_to_core(int);
+void get_process_additional_row(int*);
+void initialize_thread_coordinates(struct thread_handler*);
 
-pthread_mutex_t mutex_mpi;    /* To call MPI routines (will be used only by top and bottom thread) */
-uint8_t num_pads;             /* Number of rows that should be shared with other processes */
-uint8_t kern_width;           /* Number of elements in one kernel matrix row */
-uint16_t grid_width;          /* Number of elements in one grid matrix row */
-uint64_t grid_size;           /* Number of elements in whole grid matrix */
-uint16_t kern_size;           /* Number of elements in whole kernel matrix */
-uint16_t pad_size;            /* Number of elements in the pad section of the grid matrix */
-int rows_per_proc_size;       /* Number of elements assigned to a process */
-int rows_per_thread_size;     /* Number of elements assigned to a thread */
-int num_procs;                /* Number of MPI processes in the communicator */
-int num_threads;              /* Number of threads (main included) for every MPI process */
-int num_iterations;           /* Number of convolution iterations */
-int rank;                     /* MPI process identifier */
-float kern_dot_sum;           /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
-float *kernel;                /* Kernel buffer */
-float *grid;                  /* Grid buffer */
-float *old_grid;              /* Old grid buffer */
-const struct timespec WAIT_TIME = {.tv_sec = 0, .tv_nsec = NSEC_WAIT};
+pthread_mutex_t mutex_mpi;            /* To call MPI routines (will be used only by top and bottom thread) */
+uint8_t num_pads;                     /* Number of rows that should be shared with other processes */
+uint8_t kern_width;                   /* Number of elements in one kernel matrix row */
+uint16_t grid_width;                  /* Number of elements in one grid matrix row */
+uint64_t grid_size;                   /* Number of elements in whole grid matrix */
+uint16_t kern_size;                   /* Number of elements in whole kernel matrix */
+uint16_t pad_size;                    /* Number of elements in the pad section of the grid matrix */
+int proc_assigned_rows;               /* Number of rows assigned to a process */
+int proc_assigned_rows_size;          /* Number of elements assigned to a process */
+int num_procs;                        /* Number of MPI processes in the communicator */
+int num_threads;                      /* Number of threads (main included) for every MPI process */
+int num_iterations;                   /* Number of convolution iterations */
+int rank;                             /* MPI process identifier */
+float kern_dot_sum;                   /* Used for normalization, its value is equal to: sum(dot(kernel, kernel)) */
+float *kernel;                        /* Kernel buffer */
+float *grid;                          /* Grid buffer */
+float *old_grid;                      /* Old grid buffer */
+const struct timespec WAIT_TIME = {   /* Wait time used by MPI threads */
+  .tv_sec = 0, 
+  .tv_nsec = NSEC_WAIT
+};
 
 int main(int argc, char** argv) {
   int provided;                           /* MPI thread level supported */
@@ -71,7 +76,7 @@ int main(int argc, char** argv) {
   /* How many times do the convolution operation and total number of threads */
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
-  if(num_iterations <= 1) {
+  if(num_iterations < 1) {
     fprintf(stderr, "Invalid number of convolution iterations (first argument), value inserted: %d\n", num_iterations);
     exit(-1);
   }
@@ -145,23 +150,17 @@ int main(int argc, char** argv) {
   grid_size = grid_width * grid_width;
   num_pads = (kern_width - 1) / 2;
   pad_size = grid_width * num_pads;
-  if(grid_width % num_procs) {
-    fprintf(stderr, "Grid rows cannot be divided between processes. Grid rows: %d | Num. of process: %d\n", grid_width, num_procs);
-    exit(-1);
-  }
-  if(grid_width % num_threads) {
-    fprintf(stderr, "Grid rows cannot be divided between threads. Grid rows: %d | Num. of threads: %d\n", grid_width, num_threads);
-    exit(-1);
-  }
 
-  const int rows_per_proc = grid_width / num_procs;             /* Number of rows assigned to current process */
-  const int rows_per_thread = rows_per_proc / num_threads;
-  rows_per_proc_size = rows_per_proc * grid_width;              /* Number of elements in rows assigned to a process */
-  rows_per_thread_size = rows_per_thread * grid_width;
+  int process_rows_info[(rank) ? 1 : num_procs*2];
+  get_process_additional_row(process_rows_info);
+
+  const int fixed_rows_per_proc = (grid_width / num_procs);              // Minimum amout of rows distributed to each process
+  proc_assigned_rows = fixed_rows_per_proc + *process_rows_info;         // Number of rows assigned to current process
+  proc_assigned_rows_size = proc_assigned_rows * grid_width;             // Number of elements assigned to a process
 
   /* Read grid data */
-  grid = malloc((rows_per_proc_size + pad_size*2) * sizeof(float));
-  old_grid = malloc((rows_per_proc_size + pad_size*2) * sizeof(float));
+  grid = malloc((proc_assigned_rows_size + pad_size*2) * sizeof(float));
+  old_grid = malloc((proc_assigned_rows_size + pad_size*2) * sizeof(float));
   float* whole_grid = NULL;
 
   /* Set lower and upper pad */
@@ -170,8 +169,8 @@ int main(int argc, char** argv) {
     memset(old_grid, 0, pad_size * sizeof(float));
   }
   if(rank == num_procs-1) {
-    memset(&grid[rows_per_proc_size+pad_size], 0, pad_size * sizeof(float));
-    memset(&old_grid[rows_per_proc_size+pad_size], 0, pad_size * sizeof(float));
+    memset(&grid[proc_assigned_rows_size + pad_size], 0, pad_size * sizeof(float));
+    memset(&old_grid[proc_assigned_rows_size + pad_size], 0, pad_size * sizeof(float));
   }
 
   /* Read or receive grid data */
@@ -180,48 +179,43 @@ int main(int argc, char** argv) {
     read_grid(fp_grid, whole_grid);
 
     /* Exchange grid */
-    int start, size;
     if(num_procs > 1) {
+      int start, size;
+      int offset = process_rows_info[0];
       MPI_Request grid_reqs[num_procs-1];
-      size = rows_per_proc_size + pad_size*2;
       for(int i = 1; i < num_procs; i++) {
-        start = (rows_per_proc * i - num_pads) * grid_width;
+        /* Info about data scattering. Pads are included (to avoid the MPI exchange in the first iteration) */
+        start = (fixed_rows_per_proc * i - num_pads + offset) * grid_width;                           // Starting position for Isend
+        size = (fixed_rows_per_proc + num_pads*2 + process_rows_info[i]) * grid_width;                // Payload size for Isend
+        offset += process_rows_info[i];
         if(i == num_procs-1) size -= pad_size;
         MPI_Isend(&whole_grid[start], size, MPI_FLOAT, i, i, MPI_COMM_WORLD, &grid_reqs[i-1]);
-      }
-      /* Here "size" is equal to "rows_per_proc_size + pad_size" */
-    } else {
-      size = rows_per_proc_size;
-    }
-    memcpy(&old_grid[pad_size], whole_grid, size * sizeof(float));   /* Rank 0 */
 
+        /* Info about result gathering. Pads are excluded */
+        process_rows_info[i+num_procs] = (fixed_rows_per_proc + process_rows_info[i]) * grid_width;   // Payload size for final recv 
+        process_rows_info[i] = start + pad_size*2;                                                    // Starting position final recv
+      }
+    }
+    process_rows_info[0] = pad_size;
+    process_rows_info[num_procs] = proc_assigned_rows_size;
+    memcpy(&old_grid[pad_size], whole_grid, (proc_assigned_rows_size + pad_size) * sizeof(float));    // Rank 0
   } else {
-    int recv_size = rows_per_proc_size + pad_size*2; 
+    int recv_size = proc_assigned_rows_size + pad_size*2; 
     if(rank == num_procs-1) recv_size -= pad_size;
     MPI_Recv(old_grid, recv_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   } 
 
-  /* First iteration - No rows exchange needed */
-  if(rank) MPI_Wait(requests, MPI_STATUS_IGNORE);               /* Complete kernel receive */
-  for(int pos = 0; pos < kern_size; pos++){                     /* Computation of sum(dot(kernel, kernel)) */
+  /* Complete kernel receive and compute "sum(dot(kernel, kernel))" */
+  if(rank) MPI_Wait(requests, MPI_STATUS_IGNORE);
+  for(int pos = 0; pos < kern_size; pos++) {
     kern_dot_sum += kernel[pos] * kernel[pos];
   }
-  
+
   time_start = PAPI_get_real_usec();
   pthread_mutex_init(&mutex_mpi, NULL);
-  /* PThreads creation (every thread starts with a default job) */
+  /* PThreads arguments initialization */
   struct thread_handler* handlers = malloc(sizeof(struct thread_handler) * (num_threads));
-  int last = num_threads-1;
-  handlers[last].tid = last;
-  handlers[last].top_rows_done[0] = 0;
-  handlers[last].top_rows_done[1] = 0;
-  handlers[last].bot_rows_done[0] = 0;
-  handlers[last].bot_rows_done[1] = 0;
-  handlers[last].top = &handlers[last-1];
-  handlers[last].bottom = NULL;
-  pthread_mutex_init(&handlers[last].mutex, NULL);
-  pthread_cond_init(&handlers[last].pad_ready, NULL);
-  for(int i = 0; i < num_threads-1; i++) {
+  for(int i = 0; i < num_threads; i++) {
     handlers[i].tid = i;
     handlers[i].top_rows_done[0] = 0;
     handlers[i].top_rows_done[1] = 0;
@@ -231,14 +225,17 @@ int main(int argc, char** argv) {
     handlers[i].bottom = (i < num_threads-1) ? &handlers[i+1] : NULL;
     pthread_mutex_init(&handlers[i].mutex, NULL);
     pthread_cond_init(&handlers[i].pad_ready, NULL);
+  }
 
+  /* PThreads creation */
+  for(int i = 0; i < num_threads-1; i++) {
     rc = pthread_create(&threads[i], NULL, worker_thread, (void*)&handlers[i]);
     if (rc) { 
       fprintf(stderr, "Error while creating pthread[%d]; Return code: %d\n", i, rc);
       exit(-1);
     }
   }
-  worker_thread((void*) &handlers[last]);
+  worker_thread((void*) &handlers[num_threads-1]);   // Main thread is the bottom thread
 
   /* Wait workers termination */
   for(int i = 0; i < num_threads-1; i++) {
@@ -246,21 +243,21 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Join error, thread[%d] exited with: %d", i, rc);
   }
 
-  float *write_buffer = malloc(grid_size * sizeof(float) - grid_width * (grid_width / num_procs));
+  /* Gather results */
   float *my_grid = (num_iterations % 2) ? grid : old_grid;
   if(num_procs > 1) {
     if(rank != 0) {
-      MPI_Send(&my_grid[pad_size], rows_per_proc_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD);
+      MPI_Send(&my_grid[pad_size], proc_assigned_rows_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD);
       //MPI_Isend(&my_grid[pad_size], rows_per_proc_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD, req);
     } else {
-      // wb
-      for(int k = 0; k < num_procs-1; k++) {
+      my_grid = realloc(my_grid, (grid_size + pad_size) * sizeof(float));
+      for(int k = 1; k < num_procs; k++) {
         //MPI_Irecv(&write_buffer[grid_width * (grid_width / num_procs) * k], rows_per_proc_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, &req[k]);
-        MPI_Recv(&write_buffer[grid_width * (grid_width / num_procs) * k], rows_per_proc_size, MPI_FLOAT, k+1, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&my_grid[process_rows_info[k]], process_rows_info[k+num_procs], MPI_FLOAT, k, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       }
     }
   }
-  
+
   time_stop = PAPI_get_real_usec();
   printf("Rank[%d] | Elapsed time: %lld us\n", rank, (time_stop - time_start));
 
@@ -271,9 +268,7 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Error while creating and/or opening result file\n");
       exit(-1);
     }
-    store_data(fp_result, &my_grid[pad_size], rows_per_proc_size);
-    //MPI_Waitall(num_procs-1, req, status);
-    store_data(fp_result, write_buffer, grid_size - rows_per_proc_size);
+    store_data(fp_result, &my_grid[pad_size], grid_size);
     fclose(fp_result);
   }
 
@@ -286,10 +281,10 @@ int main(int argc, char** argv) {
 
   MPI_Barrier(MPI_COMM_WORLD);
   MPI_Finalize();
-  free(write_buffer);
   free(handlers);
-  free(grid);
-  free(old_grid);
+  if(my_grid == grid) free(old_grid);
+  else free(grid);
+  free(my_grid);
   if(!rank) free(whole_grid);
   free(kernel);
   exit(0);
@@ -297,8 +292,7 @@ int main(int argc, char** argv) {
 
 void* worker_thread(void* args) {
   struct thread_handler *handler = (struct thread_handler*)args;
-  handler->start = pad_size + handler->tid * rows_per_thread_size;
-  handler->end = handler->start + rows_per_thread_size;
+  initialize_thread_coordinates(handler);
 
   if(stick_this_thread_to_core(handler->tid)) {
     fprintf(stderr, "Error occurred while setting thread affinity on core: %d\n", handler->tid);
@@ -462,7 +456,7 @@ void* worker_thread(void* args) {
     rank, handler->tid, (t - time_start), cond_wait_time, handler_mutex_wait_time, mpi_mutex_wait_time, num_cache_miss);
 
   if(handler->tid != num_threads-1) pthread_exit(0);
-  return 0; 
+  return 0;
 }
 
 void update_log(uint8_t position, uint8_t mpi_needed, uint8_t index, int* completed, int* requests_completed, MPI_Request* request, struct thread_handler* handler, long_long** meas) {
@@ -704,4 +698,68 @@ int stick_this_thread_to_core(int core_id) {
    CPU_SET(core_id, &cpuset);
 
    return pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+}
+
+/* 
+ * Return if this process should compute an additional row. This happens if the number of processes is
+ * not a divider of the total number of rows of the input matrix. If the calling rank is 0, it also 
+ * returns info about other processes.
+ * 
+ * For example, for 8 processes the assignment order would be: 
+ * Rank : 0, 1, 2, 3, 4, 5, 6, 7
+ * Order: 0, 2, 4, 6, 7, 5, 3, 1
+*/
+void get_process_additional_row(int* retval) {
+  const int remainder = grid_width % num_procs;
+  int offset_from_last_rank = num_procs - 1 - rank;
+  const uint8_t closer_to_final_rank = rank > offset_from_last_rank;
+
+  // This var assume value 0 for first rank, 1 for last, 2 for second, 3 for penultimate, ...
+  int order = (closer_to_final_rank) ? (1 + offset_from_last_rank * 2) : (rank * 2);
+
+  // This var assume a logical true value if this rank should compute one additional row
+  const uint8_t proc_additional_row = remainder > order;
+  if(rank) {
+    *retval = proc_additional_row;
+    return;
+  }
+
+  // Rank 0 needs info about other ranks
+  retval[0] = proc_additional_row;
+  for(int i = 1; i < num_procs; i++) {
+    offset_from_last_rank = num_procs - 1 - i;
+    order = (i > offset_from_last_rank) ? (1 + offset_from_last_rank * 2) : (i * 2);
+    retval[i] =  remainder > order;
+  }
+}
+
+/* 
+ * Initialize the coordinates (starting and ending position) of the submatrix that should be computed by
+ * a thread. If the number of threads is not a divider of the number of rows assigned to this process, 
+ * distribute those additional rows starting from the center thread. 
+ * 
+ * For example, for 8 threads the assignment order would be: 
+ * TID  : 0, 1, 2, 3, 4, 5, 6, 7
+ * Order: 7, 5, 3, 1, 0, 2, 4, 6  
+*/
+void initialize_thread_coordinates(struct thread_handler* handler) {
+  const int remainder = proc_assigned_rows % num_threads;
+  const int fixed_rows_per_thread = proc_assigned_rows / num_threads;
+  const int offset_from_center = handler->tid - num_threads/2;
+  const int order = abs(offset_from_center) * 2 - ((offset_from_center >= 0) ? 0 : 1);
+  const uint8_t thread_additional_row = remainder > order;
+
+  // Previous thread may compute an additional row, compute how many additional rows for every thread
+  int start_offset = remainder / 2;
+  if(offset_from_center > 0) {
+    for(int i = 2; (i <= order) && (remainder+1 >= i); i+=2) start_offset++;
+  } else if (offset_from_center < 0) {
+    for(int i = 1; (i <= order) && (remainder > i); i+=2) start_offset--;
+  }
+
+  // Initialize coordinates
+  const int size = fixed_rows_per_thread * grid_width;
+  handler->start = pad_size + handler->tid * size + start_offset * grid_width;
+  handler->end = handler->start + size;
+  if(thread_additional_row) handler->end += grid_width;
 }

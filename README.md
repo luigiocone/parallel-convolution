@@ -34,7 +34,7 @@ make && ./run.sh
 ```
 If source matrix is an image, source and result images could be plot with python:
 ```
-cd io-files
+cd script
 python3 image.py
 ```
 The following image is an output example. Left image is the source matrix, the right image has been computed (after one convolution iteration) using a _ridge detection kernel_.

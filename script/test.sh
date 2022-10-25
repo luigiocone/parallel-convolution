@@ -8,7 +8,7 @@ function ctrl_c() {
 
 # Testing different interleavings (hopefully)
 SEQ_PATH="/home/luigi/Desktop/seq"
-PAR_PATH="/home/luigi/Desktop/Parallel-Convolution-MPI"
+PAR_PATH="/home/luigi/Desktop/parallel-convolution"
 COND=''
 declare -i i=0
 declare -i rc=0

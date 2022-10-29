@@ -206,15 +206,15 @@ int main(int argc, char** argv) {
       MPI_Request grid_reqs[num_procs-1];
       for(int i = 1; i < num_procs; i++) {
         // Info about data scattering. Pads are included (to avoid an MPI exchange in the first iteration)
-        start = (fixed_rows_per_proc * i - num_pads + offset) * row_num_chars;                      // Starting position for Isend
-        size = (fixed_rows_per_proc + num_pads*2 + process_rows_info[i]) * row_num_chars;           // Payload size for Isend
+        start = (fixed_rows_per_proc * i - num_pads + offset) * row_num_chars;                 // Starting position for Isend
+        size = (fixed_rows_per_proc + num_pads*2 + process_rows_info[i]) * row_num_chars;      // Payload size for Isend
         if(i == num_procs-1) size -= row_num_chars;
         MPI_Isend(&char_grid[start], size, MPI_CHAR, i, i, MPI_COMM_WORLD, &grid_reqs[i-1]);
-        temp = process_rows_info[i];
 
         // Info about result gathering. Pads are excluded
-        process_rows_info[i] = (fixed_rows_per_proc * i + num_pads + offset) * grid_width;          // Starting position final recv
-        process_rows_info[i+num_procs] = (fixed_rows_per_proc + process_rows_info[i]) * grid_width; // Payload size for final recv
+        temp = process_rows_info[i];
+        process_rows_info[i] = (fixed_rows_per_proc * i + offset) * row_num_chars;             // Starting position final recv
+        process_rows_info[i+num_procs] = (fixed_rows_per_proc + temp) * row_num_chars;         // Payload size for final recv
         offset += temp;
       }
     }
@@ -265,14 +265,14 @@ int main(int argc, char** argv) {
   }
 
   // Gather results
-  float *result = (num_iterations % 2) ? grid : old_grid;
   if(num_procs > 1) {
     if(rank != 0) {
-      MPI_Send(&result[pad_size], proc_assigned_rows_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD);
+      int start = num_pads * row_num_chars;
+      int size = proc_assigned_rows * row_num_chars;
+      MPI_Send(&char_grid[start], size, MPI_CHAR, 0, 11, MPI_COMM_WORLD);
     } else {
-      result = realloc(result, (grid_size + pad_size) * sizeof(float));
       for(int k = 1; k < num_procs; k++) {
-        MPI_Recv(&result[process_rows_info[k]], process_rows_info[k+num_procs], MPI_FLOAT, k, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&char_grid[process_rows_info[k]], process_rows_info[k+num_procs], MPI_CHAR, k, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       }
     }
   }
@@ -287,17 +287,13 @@ int main(int argc, char** argv) {
       fprintf(stderr, "Error while creating and/or opening result file\n");
       exit(-1);
     }
-    int parsed = floats_to_echars(&result[pad_size], char_grid, grid_size);
-    if(parsed != row_num_chars * grid_width) {
-      fprintf(stderr, "Error in file parsing: number of float parsed (%d) is different from the expected amount (%d)\n", parsed, row_num_chars * grid_width);
-      exit(-1);
-    }
-
-    int char_written = fwrite(char_grid, sizeof(char), parsed, fp_result);
+    
+    int to_write = row_num_chars * grid_width;
+    int char_written = fwrite(char_grid, sizeof(char), to_write, fp_result);
     fclose(fp_result);
 
-    if(char_written != parsed) {
-      fprintf(stderr, "Error in file writing: number of char grid elements written (%d) is different from the expected amount (%d)\n", char_written, parsed);
+    if(char_written != to_write) {
+      fprintf(stderr, "Error in file writing: number of char grid elements written (%d) is different from the expected amount (%d)\n", char_written, to_write);
       exit(-1);
     }
   }
@@ -312,8 +308,8 @@ int main(int argc, char** argv) {
   MPI_Barrier(MPI_COMM_WORLD);
   MPI_Finalize();
   free(handlers);
-  free((num_iterations % 2) ? old_grid : grid);
-  free(result);
+  free(grid);
+  free(old_grid);
   free(char_grid);
   free(kernel);
   exit(0);
@@ -436,10 +432,17 @@ void* worker_thread(void* args) {
   long_long num_cache_miss;
   if ((rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
     handle_PAPI_error(rc, "Error in PAPI_stop().");
-  
+
   // Parsing float submatrix to char
-  //int parsed = floats_to_echars(&my_grid[handler->start], &char_grid[handler->start * (EXP_CHARS + 1) * sizeof(char)], (handler->end - handler->start));
-  //if(parsed != (handler->end - handler->start)) fprinf(stderr, "...");
+  int char_start = handler->start * (EXP_CHARS + 1) * sizeof(char);
+  int char_size = (handler->end - handler->start) * (EXP_CHARS + 1) * sizeof(char);
+  if(!rank) char_start -= row_num_chars;
+
+  int parsed = floats_to_echars(&my_grid[handler->start], &char_grid[char_start], (handler->end - handler->start));
+  if(parsed != char_size) {
+    fprintf(stderr, "Error in file parsing: number of char parsed (%d) is different from the expected amount (%d)\n", parsed, char_size);
+    exit(-1);
+  }
 
   printf("Thread[%d][%d]: Elapsed: %llu | Condition WT: %llu | Handlers mutex WT: %llu | MPI mutex WT: %llu | Total L2 cache misses: %lld\n", 
     rank, handler->tid, (t - time_start), cond_wait_time, handler_mutex_wait_time, mpi_mutex_wait_time, num_cache_miss);
@@ -686,13 +689,14 @@ int floats_to_echars(float *float_buffer, char* char_buffer, int count) {
   int stored = 0;
 
   for(int fetched = 0; fetched < count; fetched++){
-    stored += sprintf(&char_buffer[stored], "%+e", float_buffer[fetched]);
+    stored += sprintf(&char_buffer[stored], "%+e", float_buffer[fetched]);  // to replace with ftoa
     if (fetched == limit) {
       limit += grid_width;
-      stored += sprintf(&char_buffer[stored], "\n");
+      char_buffer[stored] = '\n';
     } else {
-      stored += sprintf(&char_buffer[stored], " ");
+      char_buffer[stored] = ' ';
     }
+    stored++;
   }
 
   return stored;

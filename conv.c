@@ -47,6 +47,7 @@ struct io_thread_args {
   pthread_mutex_t mutex;              // Mutex to access shared variables beetween main thread and io thread
   pthread_cond_t cond;                // Necessary one synchronization point beetween main thread and io thread
   struct proc_info* procs_info;       // Info used for MPI distribution of grid
+  long_long* read_time;               // To measure read time of grid file
 };
 
 struct mpi_args {
@@ -68,7 +69,8 @@ void get_process_additional_row(struct proc_info*);
 void initialize_thread_coordinates(struct thread_handler*);
 void parse_subgrid_and_sync(struct thread_handler*);
 
-pthread_mutex_t mutex_mpi;            // To call MPI routines (will be used only by top and bottom thread)
+pthread_mutex_t mutex_mpi;            // To call MPI routines in mutual exclusion (will be used only by top and bottom thread)
+uint8_t affinity;                     // If thread affinity should be set 
 uint8_t num_pads;                     // Number of rows that should be shared with other processes
 uint16_t kern_width;                  // Number of elements in one kernel matrix row
 uint16_t pad_size;                    // Number of elements in the pad section of the grid matrix
@@ -86,6 +88,7 @@ float *kernel;                        // Kernel buffer
 float *grid;                          // Grid buffer
 float *old_grid;                      // Old grid buffer
 struct io_thread_args io_args;        // Used by io, worker, and main threads to synchronize about grid read
+long_long** thread_measures;          // To collect thread measures
 const struct timespec WAIT_TIME = {   // Wait time used by MPI threads
   .tv_sec = 0, 
   .tv_nsec = NSEC_WAIT
@@ -95,11 +98,14 @@ int main(int argc, char** argv) {
   int provided;                       // MPI thread level supported
   int rc;                             // Return code used in error handling
   long_long time_start, time_stop;    // To measure execution time
+  long_long read_time, write_time, t; // Measuring disk I/O times
   FILE *fp_grid, *fp_kernel;          // I/O files for grid and kernel matrices
+  FILE *fp_result = NULL;             // I/O file for result
 
   // Fetch from arguments how many convolution iterations do and the number of threads
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
   num_threads = (argc > 2) ? atoi(argv[2]) : DEFAULT_THREADS;
+  affinity = (argc > 3) ? atoi(argv[3]) : 1;
   if(num_iterations < DEFAULT_ITERATIONS) {
     fprintf(stderr, "Invalid number of convolution iterations (first argument), value inserted: %d\n", num_iterations);
     exit(-1);
@@ -132,7 +138,6 @@ int main(int argc, char** argv) {
   struct proc_info procs_info[(rank) ? 1 : num_procs];    // Which process must compute an additional row
   procs_info[num_procs-1].size = 0;                       // Used as flag, will be different from 0 only after the procs info are ready
   io_args.grid_ready = 0;                                 // Used as flag, will be different from 0 only after the grid is ready to be convoluted
-  pthread_mutex_init(&mutex_mpi, NULL);                   // Used by threads to call MPI routines in mutual exclusion
   pthread_mutex_init(&(io_args.mutex), NULL);             // Used by io_thread and main thread to synchronize
   pthread_cond_init(&(io_args.cond), NULL);
 
@@ -148,10 +153,12 @@ int main(int argc, char** argv) {
     }
 
     // First token represent matrix dimension
+    read_time = PAPI_get_real_usec();
     if(fread(&grid_width, sizeof(uint), 1, fp_grid) != 1 || fread(&kern_width, sizeof(uint16_t), 1, fp_kernel) != 1) {
       fprintf(stderr, "Error in file reading: first element should be the row (or column) length of a square matrix\n");
       exit(-1);
     }
+    read_time = PAPI_get_real_usec() - read_time;
 
     // Exchange initial information 
     if(num_procs > 1) {
@@ -162,7 +169,9 @@ int main(int argc, char** argv) {
 
     // Exchange kernel
     kern_size = kern_width * kern_width;
+    t = PAPI_get_real_usec();
     read_kernel(fp_kernel);
+    read_time += PAPI_get_real_usec() - t;
     if(num_procs > 1) {
       for (int i = 1; i < num_procs; i++)
         MPI_Isend(kernel, kern_size, MPI_FLOAT, i, i, MPI_COMM_WORLD, &requests[i + num_procs]);
@@ -173,8 +182,8 @@ int main(int argc, char** argv) {
     old_grid = malloc((grid_width + num_pads*2) * grid_width * sizeof(float));
     io_args.fp_grid = fp_grid;
     io_args.procs_info = procs_info;
-    rc = pthread_create(&io_thread, NULL, grid_input_thread, (void*)&io_args);
-    if (rc) { 
+    io_args.read_time = &read_time;
+    if ((rc = pthread_create(&io_thread, NULL, grid_input_thread, (void*)&io_args))) { 
       fprintf(stderr, "Error while creating pthread 'io_thread'; Return code: %d\n", rc);
       exit(-1);
     }
@@ -189,6 +198,8 @@ int main(int argc, char** argv) {
   }
 
   // Variable initialization and data splitting
+  pthread_mutex_init(&mutex_mpi, NULL);
+  thread_measures = malloc(sizeof(long_long*) * num_threads);
   grid_size = grid_width * grid_width;
   num_pads = (kern_width - 1) / 2;
   pad_size = grid_width * num_pads;
@@ -241,6 +252,12 @@ int main(int argc, char** argv) {
     MPI_Irecv(old_grid, recv_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &(io_args.request));
   }
 
+  // Prepare output file (used later) while io_thread is blocked
+  if(!rank && (fp_result = fopen(RESULT_FILE_PATH, "wb")) == NULL) {
+    fprintf(stderr, "Error while creating and/or opening result file\n");
+    exit(-1);
+  }
+
   // Complete kernel receive and compute "sum(dot(kernel, kernel))"
   if(num_procs > 1 && rank) 
     MPI_Wait(requests, MPI_STATUS_IGNORE);
@@ -259,6 +276,7 @@ int main(int argc, char** argv) {
   }
 
   // PThreads creation
+  t = PAPI_get_real_usec() - time_start;
   for(int i = 0; i < num_threads-1; i++) {
     rc = pthread_create(&threads[i], NULL, worker_thread, (void*)&handlers[i]);
     if (rc) { 
@@ -269,38 +287,30 @@ int main(int argc, char** argv) {
   worker_thread((void*) &handlers[num_threads-1]);   // Main thread is the bottom thread
 
   // Wait workers termination and check if 'io_thread' has exited
+  if(!rank && pthread_join(io_thread, (void*) &rc)) 
+    fprintf(stderr, "Join error, io_thread exited with: %d", rc);
   for(int i = 0; i < num_threads-1; i++) {
     if(pthread_join(threads[i], (void*) &rc)) 
       fprintf(stderr, "Join error, worker_thread[%d] exited with: %d", i, rc);
   }
-  if(!rank && pthread_join(io_thread, (void*) &rc)) 
-    fprintf(stderr, "Join error, io_thread exited with: %d", rc);
 
   // Gather results and terminate MPI execution environment
   float *res_grid = (num_iterations % 2) ? grid : old_grid;
   if(num_procs > 1) {
-    if(rank != 0) {
-      int start = num_pads * grid_width;
-      int size = proc_assigned_rows * grid_width;
-      MPI_Send(&res_grid[start], size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD);
-    } else {
+    if(!rank) {
       for(int k = 1; k < num_procs; k++) {
         MPI_Recv(&res_grid[procs_info[k].start], procs_info[k].size, MPI_FLOAT, k, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       }
+    } else {
+      MPI_Send(&res_grid[pad_size], proc_assigned_rows_size, MPI_FLOAT, 0, 11, MPI_COMM_WORLD);
     }
   }
-  MPI_Finalize();
 
-  // Store computed matrix
+  // Store computed matrix. Rank 0 has the whole matrix file in memory, other ranks have only the part they are interested in
   if (!rank) {
-    FILE *fp_result;
-    if((fp_result = fopen(RESULT_FILE_PATH, "w")) == NULL) {
-      fprintf(stderr, "Error while creating and/or opening result file\n");
-      exit(-1);
-    }
-
-    // Rank 0 has the whole matrix file in memory, other ranks have only the part they are interested in
+    write_time = PAPI_get_real_usec();
     int float_written = fwrite(res_grid, sizeof(float), grid_size, fp_result);
+    write_time = PAPI_get_real_usec() - write_time;
     fclose(fp_result);
 
     if(float_written != grid_size) {
@@ -311,7 +321,16 @@ int main(int argc, char** argv) {
 
   // Print measures
   time_stop = PAPI_get_real_usec();
-  printf("Rank[%d] | Elapsed time: %lld us\n", rank, (time_stop - time_start));
+  printf("Rank[%d] | Elapsed time: %lld us | Elapsed before thread creation: %llu us\n", rank, (time_stop - time_start), t);
+  if(!rank) printf("Rank[%d] I/O times | Reads from disk: %lld us | Write to disk: %llu us\n", rank, read_time, write_time);
+
+  long_long* curr_meas;
+  for(int i = 0; i < num_threads; i++) {
+    curr_meas = thread_measures[i];
+    printf("Thread[%d][%d]: Elapsed: %llu | Condition WT: %llu | Handlers mutex WT: %llu | MPI mutex WT: %llu | Total L2 cache misses: %lld\n", 
+      rank, i, curr_meas[0], curr_meas[1], curr_meas[2], curr_meas[3], curr_meas[4]);
+    free(curr_meas);
+  }
 
   // Destroy pthread objects and free all used resources
   pthread_mutex_destroy(&mutex_mpi);
@@ -322,6 +341,8 @@ int main(int argc, char** argv) {
     pthread_cond_destroy(&handlers[i].pad_ready);
   }
 
+  MPI_Finalize();
+  free(thread_measures);
   free(handlers);
   free(grid);
   free(old_grid);
@@ -332,7 +353,9 @@ int main(int argc, char** argv) {
 /* This is executed only by rank 0 */
 void* grid_input_thread(void* args) {
   struct io_thread_args *io_args = (struct io_thread_args*)args;
+  *(io_args->read_time) = PAPI_get_real_usec();
   const int float_read = fread(&old_grid[pad_size], sizeof(float), grid_size, io_args->fp_grid);
+  *(io_args->read_time) = PAPI_get_real_usec() - *(io_args->read_time);  
   if(float_read < grid_size) {
     fprintf(stderr, "Error in file reading: number of float elements read (%d) is lower than the expected amount (%ld)\n", float_read, grid_size);
     exit(-1);
@@ -392,16 +415,31 @@ void* worker_thread(void* args) {
 
   long_long t, cond_wait_time = 0, handler_mutex_wait_time = 0, mpi_mutex_wait_time = 0;
   long_long* measures[3] = {&cond_wait_time, &handler_mutex_wait_time, &mpi_mutex_wait_time};
+  long_long* meas_to_return = malloc(sizeof(long_long) * 5);
   long_long time_start = PAPI_get_real_usec();
 
   // Thread setup
-  if(stick_this_thread_to_core(handler->tid)) {
+  if(affinity && stick_this_thread_to_core(handler->tid)) {
     fprintf(stderr, "Error occurred while setting thread affinity on core: %d\n", handler->tid);
     exit(-1);
   }
   initialize_thread_coordinates(handler);
 
-  // Check if grid data is ready and start convolution
+  if(mpi_needed) {
+    if(handler->tid == 0) {
+      margs->send_position = handler->start;
+      margs->recv_position = 0;
+      margs->neighbour = rank - 1;
+    } else {
+      margs->send_position = (handler->end - pad_size);
+      margs->recv_position = handler->end;
+      margs->neighbour = rank + 1;
+    }
+  } else {
+    margs = NULL;
+  }
+
+  // Synchronization point, check if grid data is ready and start convolution
   if(num_procs > 1 && rank && !handler->tid) {
     MPI_Wait(&(io_args.request), MPI_STATUS_IGNORE);
     pthread_mutex_lock(&(io_args.mutex));
@@ -429,24 +467,12 @@ void* worker_thread(void* args) {
 
   // Send top or bottom rows
   if(mpi_needed) {
-    if(handler->tid == 0) {
-      margs->send_position = handler->start;
-      margs->recv_position = 0;
-      margs->neighbour = rank - 1;
-    } else {
-      margs->send_position = (handler->end - pad_size);
-      margs->recv_position = handler->end;
-      margs->neighbour = rank + 1;
-    }
-
     t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_mpi);
     mpi_mutex_wait_time += PAPI_get_real_usec() - t;
     MPI_Isend(&my_grid[margs->send_position], pad_size, MPI_FLOAT, margs->neighbour, 0, MPI_COMM_WORLD, &(margs->request[0]));
     MPI_Irecv(&my_grid[margs->recv_position], pad_size, MPI_FLOAT, margs->neighbour, 0, MPI_COMM_WORLD, &(margs->request[2]));
     pthread_mutex_unlock(&mutex_mpi);
-  } else {
-    margs = NULL;
   }
 
   // Complete the first convolution iteration by computing central elements
@@ -493,13 +519,16 @@ void* worker_thread(void* args) {
   }
 
   // Retrieving execution info
-  t = PAPI_get_real_usec();
   long_long num_cache_miss;
   if ((rc = PAPI_stop(event_set, &num_cache_miss)) != PAPI_OK)
-    handle_PAPI_error(rc, "Error in PAPI_stop().");
-
-  printf("Thread[%d][%d]: Elapsed: %llu | Condition WT: %llu | Handlers mutex WT: %llu | MPI mutex WT: %llu | Total L2 cache misses: %lld\n", 
-    rank, handler->tid, (t - time_start), cond_wait_time, handler_mutex_wait_time, mpi_mutex_wait_time, num_cache_miss);
+    handle_PAPI_error(rc, "Error in PAPI_stop().");  
+ 
+  meas_to_return[1] = cond_wait_time; 
+  meas_to_return[2] = handler_mutex_wait_time; 
+  meas_to_return[3] = mpi_mutex_wait_time; 
+  meas_to_return[4] = num_cache_miss;
+  meas_to_return[0] = (PAPI_get_real_usec() - time_start);
+  thread_measures[handler->tid] = meas_to_return;
 
   if(handler->tid != num_threads-1) pthread_exit(0);
   return 0;
@@ -721,6 +750,7 @@ int stick_this_thread_to_core(int core_id) {
   const long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
   if(num_threads > num_cores) return 0;
   if(core_id < 0) return 1;
+  if((num_threads * 2) <= num_cores) core_id++;   // Trying to avoid hyperthreading in a bad way
 
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);

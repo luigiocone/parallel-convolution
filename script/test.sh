@@ -7,13 +7,14 @@ function ctrl_c() {
 }
 
 # Testing different interleavings (hopefully)
-SEQ_PATH="/home/luigi/Desktop/seq"
-PAR_PATH="/home/luigi/Desktop/parallel-convolution"
+SEQ_PATH="/home/luigi/Desktop/seq/io-files/result.bin"
+PAR_PATH="/home/luigi/Desktop/parallel-convolution/io-files/result.bin"
+PRJ_PATH="/home/luigi/Desktop/parallel-convolution/"
 COND=''
 declare -i i=0
 declare -i rc=0
 
-cd $PAR_PATH
+cd $PRJ_PATH
 make
 echo ""
 echo "Printing executions errors"
@@ -25,7 +26,7 @@ if [ $# = 1 ]; then
         echo "Execution $i:"
         ./run.sh > outputs.txt
         rc=$?
-        COND=$(diff $PAR_PATH/io-files/result.txt $SEQ_PATH/io-files/result.txt | grep '^[1-9]')
+        COND=$(diff $PAR_PATH $SEQ_PATH | grep '^[1-9]')
         i=$(( i + 1 ))
     done
     echo "return code: ${rc}"
@@ -36,6 +37,6 @@ else
     do
        echo "Execution $i:"
        ./run.sh > /dev/null   # silencing the output
-       diff $PAR_PATH/io-files/result.txt $SEQ_PATH/io-files/result.txt | grep '^[1-9]'
+       diff $PAR_PATH $SEQ_PATH | grep '^[1-9]'
     done
 fi

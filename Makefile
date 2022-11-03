@@ -4,4 +4,4 @@ CC=mpicc
 all: conv
 
 conv: conv.c
-	$(CC) conv.c -o conv /usr/local/lib/libpapi.a -lm -lpthread -std=gnu11 -Wall -O3
+	$(CC) conv.c -o conv /usr/local/lib/libpapi.a -lm -lpthread -std=gnu11 -mavx -Wall -O3

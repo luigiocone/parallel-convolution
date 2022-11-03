@@ -7,8 +7,8 @@ function ctrl_c() {
 }
 
 # Testing different interleavings (hopefully)
-SEQ_PATH="/home/luigi/Desktop/seq/io-files/result.bin"
-PAR_PATH="/home/luigi/Desktop/parallel-convolution/io-files/result.bin"
+SEQ_PATH="/home/luigi/Desktop/seq/io-files/result.txt"
+PAR_PATH="/home/luigi/Desktop/parallel-convolution/io-files/result.txt"
 PRJ_PATH="/home/luigi/Desktop/parallel-convolution/"
 COND=''
 declare -i i=0

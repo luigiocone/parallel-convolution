@@ -4,7 +4,7 @@ import sys
 from skimage import data, color
 from matplotlib import pyplot as plt
 
-GRID_FILE_NAME = "../io-files/grid.bin";
+GRID_FILE_NAME = "../io-files/grids/haring.bin";
 RESULT_FILE_NAME = "../io-files/result.bin";
 
 # Write a ndarray to a file in binary or text mode. The first element written is the matrix dimension
@@ -18,20 +18,20 @@ def ndarray_to_file(arr, dest_path, binary):
             np.savetxt(f, arr, delimiter=' ', fmt="%+e")
 
 # Read a ndarray from a binary or text file. If skip_header == 1, then the first element should be the matrix dimension
-def file_to_ndarray(src_path, binary, skip_header):
+def file_to_ndarray(src_path, binary, has_dim_header):
     src_img, shape = 0, 0
-    mode = "rb" if binary else "r"  
+    to_skip = 1 if has_dim_header else 0
+    mode = "rb" if binary else "r"
+
     with open(src_path, mode) as f:
         if binary:
-            if skip_header != 0:
-                shape = int.from_bytes(f.read(4), sys.byteorder, signed=False)
+            if has_dim_header: shape = int.from_bytes(f.read(4), sys.byteorder, signed=False)
             src_img = np.fromfile(f, dtype=np.float32, count=-1)
         else:
-            src_img = np.genfromtxt(src_path, delimiter=' ', dtype=np.float32, skip_header=skip_header)
+            if has_dim_header: shape = int(f.readline())
+            src_img = np.genfromtxt(src_path, delimiter=' ', dtype=np.float32, skip_header=to_skip)
 
-        if skip_header == 0:
-            shape = round(np.sqrt(src_img.shape[0]))
-        
+        if shape == 0: shape = round(np.sqrt(src_img.size))
         src_img = np.reshape(src_img, newshape=(shape, shape), order='C')
     return src_img;
 
@@ -46,6 +46,7 @@ def plot_images(left_img, right_img):
     print(f'src_img type:  {type(left_img)} | res_img type: {type(right_img)}')
     print(f'src_img dtype: {left_img.dtype} | res_img dtype {right_img.dtype}')
     print(f'src_img shape: {left_img.shape} | res img shape {right_img.shape}')
+    # right_img = right_img[0:1024, 0:1024]   # Get only a specific part of the image
 
     #subplot(r,c) provide the no. of rows and columns
     f, axarr = plt.subplots(1, 2) 
@@ -57,7 +58,7 @@ def main():
     # Get an image from scikit-image dataset or from filesystem (as actual image or something else)
     '''src_img = data.camera()'''
     '''src_img = image_to_gray_ndarray("/home/luigi/Desktop/parallel-convolution/io-files/other/haring.jpg")'''
-    src_img = file_to_ndarray("../io-files/grid.bin", binary=True, skip_header=1)
+    src_img = file_to_ndarray(GRID_FILE_NAME, binary=True, has_dim_header=True)
 
     # conv.c works only with square matrices
     if (src_img.shape[0] != src_img.shape[1]):
@@ -65,10 +66,10 @@ def main():
         return;
 
     # Store the image in a file (choosing between text or binary mode)
-    # ndarray_to_file(src_img, GRID_FILE_NAME, binary=True)
+    # ndarray_to_file(src_img, "./new_matrix.bin", binary=True)
 
     # Load convolution result and plot it next to source matrix
-    res_img = file_to_ndarray(RESULT_FILE_NAME, binary=True, skip_header=0)
+    res_img = file_to_ndarray(RESULT_FILE_NAME, binary=True, has_dim_header=False)
     plot_images(src_img, res_img)
 
 

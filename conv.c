@@ -17,9 +17,11 @@
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_THREADS 2
 #define GRID_FILE_PATH "./io-files/grids/haring.bin"
-#define KERNEL_FILE_PATH "./io-files/kernels/ridge.bin"
+#define KERNEL_FILE_PATH "./io-files/kernels/gblur.bin"
 #define RESULT_FILE_PATH "./io-files/result.bin"
 #define NSEC_WAIT (5*1000)
+#define VEC_SIZE 4
+#define MEAN_VALUE 0
 #define TOP 0
 #define BOTTOM 1
 #define CENTER 2
@@ -70,7 +72,7 @@ void get_process_additional_row(struct proc_info*);
 void initialize_thread_coordinates(struct thread_handler*);
 void parse_subgrid_and_sync(struct thread_handler*);
 
-__m128i mask;                         // Used in "_mm_maskload_ps" to discards last element in contiguous load 
+__m128i last_mask;                    // Used by SIMD instructions to discard last elements in contiguous load
 pthread_mutex_t mutex_mpi;            // To call MPI routines in mutual exclusion (will be used only by top and bottom thread)
 uint8_t affinity;                     // If thread affinity should be set 
 uint8_t num_pads;                     // Number of rows that should be shared with other processes
@@ -100,9 +102,8 @@ int main(int argc, char** argv) {
   int provided;                       // MPI thread level supported
   int rc;                             // Return code used in error handling
   long_long time_start, time_stop;    // To measure execution time
-  long_long read_time, write_time, t; // Measuring disk I/O times
+  long_long read_time;                // Measuring disk I/O times
   FILE *fp_grid, *fp_kernel;          // I/O files for grid and kernel matrices
-  FILE *fp_result = NULL;             // I/O file for result
 
   // Fetch from arguments how many convolution iterations do and the number of threads
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
@@ -171,7 +172,7 @@ int main(int argc, char** argv) {
 
     // Exchange kernel
     kern_size = kern_width * kern_width;
-    t = PAPI_get_real_usec();
+    long_long t = PAPI_get_real_usec();
     read_kernel(fp_kernel);
     read_time += PAPI_get_real_usec() - t;
     if(num_procs > 1) {
@@ -202,7 +203,6 @@ int main(int argc, char** argv) {
   // Variable initialization and data splitting
   pthread_mutex_init(&mutex_mpi, NULL);
   thread_measures = malloc(sizeof(long_long*) * num_threads);
-  mask = _mm_set_epi32(0, UINT32_MAX, UINT32_MAX, UINT32_MAX);
   grid_size = grid_width * grid_width;
   num_pads = (kern_width - 1) / 2;
   pad_size = grid_width * num_pads;
@@ -245,12 +245,6 @@ int main(int argc, char** argv) {
     MPI_Irecv(old_grid, recv_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &(io_args.request));
   }
 
-  // Prepare output file (used later) while io_thread is blocked
-  if(!rank && (fp_result = fopen(RESULT_FILE_PATH, "wb")) == NULL) {
-    fprintf(stderr, "Error while creating and/or opening result file\n");
-    exit(-1);
-  }
-
   // Set a zero-pad for lowest and highest process 
   if(!rank){
     memset(grid, 0, pad_size * sizeof(float));
@@ -271,6 +265,13 @@ int main(int argc, char** argv) {
     pthread_cond_init(&handlers[i].pad_ready, NULL);
   }
 
+  // Computation of "last_mask"
+  uint32_t rem = kern_width % VEC_SIZE;
+  uint32_t to_load[VEC_SIZE];
+  memset(to_load, 0, VEC_SIZE * sizeof(uint32_t));
+  for(int i = 0; i < rem; i++) to_load[i] = UINT32_MAX;
+  last_mask = _mm_loadu_si128((__m128i*) to_load);
+
   // Complete kernel receive and compute "sum(dot(kernel, kernel))"
   if(num_procs > 1 && rank) 
     MPI_Wait(requests, MPI_STATUS_IGNORE);
@@ -288,45 +289,36 @@ int main(int argc, char** argv) {
   }
   worker_thread((void*) &handlers[num_threads-1]);   // Main thread is the bottom thread
 
-  // Gather results and terminate MPI execution environment
+  // Check if 'io_thread' has exited and start recv listeners to gather results
   float *res_grid = (num_iterations % 2) ? grid : old_grid;
-  if(!rank && num_procs > 1) {
-    for(int k = 1; k < num_procs; k++) {
-      MPI_Irecv(&res_grid[procs_info[k].start], procs_info[k].size, MPI_FLOAT, k, k, MPI_COMM_WORLD, &requests[k-1]);
+  if(!rank) {
+    if(pthread_join(io_thread, (void*) &rc)) 
+      fprintf(stderr, "Join error, io_thread exited with: %d", rc);
+
+    if(num_procs > 1) {
+      for(int p = 1; p < num_procs; p++) {
+        MPI_Irecv(&res_grid[procs_info[p].start], procs_info[p].size, MPI_FLOAT, p, p, MPI_COMM_WORLD, &requests[p-1]);
+      }
     }
   }
 
-  // Wait workers termination and check if 'io_thread' has exited
-  if(!rank && pthread_join(io_thread, (void*) &rc)) 
-    fprintf(stderr, "Join error, io_thread exited with: %d", rc);
+  // Wait workers termination
   for(int i = 0; i < num_threads-1; i++) {
     if(pthread_join(threads[i], (void*) &rc)) 
       fprintf(stderr, "Join error, worker_thread[%d] exited with: %d", i, rc);
   }
 
-  if(rank) MPI_Send(&res_grid[pad_size], proc_assigned_rows_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD);
-
-  // Store computed matrix. Rank 0 has the whole matrix file in memory, other ranks have only the part they are interested in
-  if (!rank) {
-    if(num_procs > 1) {
-      MPI_Status statuses[num_procs-1];
-      MPI_Waitall(num_procs-1, requests, statuses);
-    }
-    write_time = PAPI_get_real_usec();
-    int float_written = fwrite(res_grid, sizeof(float), grid_size, fp_result);
-    fclose(fp_result);
-    write_time = PAPI_get_real_usec() - write_time;
-
-    if(float_written != grid_size) {
-      fprintf(stderr, "Error in file writing: number of float grid elements written (%d) is different from the expected amount (%ld)\n", float_written, grid_size);
-      exit(-1);
-    }
+  if(rank) {
+    MPI_Send(&res_grid[pad_size], proc_assigned_rows_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD);
+  } else if(num_procs > 1) {
+    MPI_Status statuses[num_procs-1];
+    MPI_Waitall(num_procs-1, requests, statuses);
   }
-
+  
   // Print measures
   time_stop = PAPI_get_real_usec();
   printf("Rank[%d] | Elapsed time: %lld us\n", rank, (time_stop - time_start));
-  if(!rank) printf("Rank[%d] I/O times | Reads from disk: %lld us | Write to disk: %llu us\n", rank, read_time, write_time);
+  if(!rank) printf("Rank[0] | Elapsed time to read from disk: %lld us\n", read_time);
 
   long_long* curr_meas;
   for(int i = 0; i < num_threads; i++) {
@@ -334,6 +326,17 @@ int main(int argc, char** argv) {
     printf("Thread[%d][%d]: Elapsed: %llu | Condition WT: %llu | Handlers mutex WT: %llu | MPI mutex WT: %llu | Total L2 cache misses: %lld\n", 
       rank, i, curr_meas[0], curr_meas[1], curr_meas[2], curr_meas[3], curr_meas[4]);
     free(curr_meas);
+  }
+
+  // Store computed matrix for debug purposes. Rank 0 has the whole matrix file in memory, other ranks have only the part they are interested in 
+  FILE *fp_result = NULL;
+  if (!rank && (fp_result = fopen(RESULT_FILE_PATH, "wb")) != NULL) {
+    int float_written = fwrite(res_grid, sizeof(float), grid_size, fp_result);
+    if(float_written != grid_size) {
+      fprintf(stderr, "Error in file writing: number of float grid elements written (%d) is different from the expected amount (%ld)\n", float_written, grid_size);
+      exit(-1);
+    }
+    fclose(fp_result);
   }
 
   // Destroy pthread objects and free all used resources
@@ -610,9 +613,10 @@ void test_and_update(uint8_t position, uint8_t iter, int* completed, struct mpi_
     t = PAPI_get_real_usec();
     pthread_mutex_lock(&(neigh_handler->mutex));
     *handler_mutex_wait_time += PAPI_get_real_usec() - t;
-    completed[position] = rows_to_wait[index];
-    if(completed[position]) 
+    if(rows_to_wait[index]) {
+      completed[position] = 1;
       rows_to_wait[index] = 0;
+    }
     else if(completed[!position] && completed[CENTER]) {
       t = PAPI_get_real_usec();
       while(!rows_to_wait[index]) {
@@ -666,19 +670,19 @@ void test_and_update(uint8_t position, uint8_t iter, int* completed, struct mpi_
 
 /* Compute convolution of "sub_grid" in the specified range. Save the result in "new_grid" */
 void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_index) {
-  float result;
-  float matrix_dot_sum;                    // Used for normalization
-  int col = start_index % grid_width;      // Index of current column
-  int row_start = start_index - col;       // Index of the first element in current row
+  float result = 0;
+  float matrix_dot_sum = 0;                // Used for normalization
+  int col = start_index % grid_width;      // Index of current sub_grid column
+  int row_start = start_index - col;       // Index of the first element in current sub_grid row
 
   int offset;                              // How far is current element from its closest border
   int grid_index;                          // Current position in grid matrix
   int kern_index;                          // Current position in kernel matrix
   int kern_end;                            // Describes when it's time to change row
   int iterations;                          // How many iterations are necessary to calc a single value of "new_grid"
-  //__m128 vec_grid, vec_kern, vec_temp;     // Floating point vector for grid and kernel (plus a temp vector)
-  //__m128 vec_rslt;                         // Floating point vector of result, will be reduced at the end
-  //__m128 vec_mxds;                         // Floating point vector of matrix dot sum, will be reduced at the end
+  __m128 vec_grid, vec_kern, vec_temp;     // Floating point vector for grid and kernel (plus a temp vector)
+  __m128 vec_rslt;                         // Floating point vector of result, will be reduced at the end
+  __m128 vec_mxds;                         // Floating point vector of matrix dot sum, will be reduced at the end
 
   for(int i = start_index; i < end_index; i++) {
     // Setting indexes for current element
@@ -694,7 +698,7 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       grid_index = i-num_pads-pad_size;
       kern_index = 0;
       kern_end = kern_width-offset;
-      iterations = (num_pads + grid_width-1-col) *kern_width;
+      iterations = (num_pads + grid_width-1-col) * kern_width;
     } else {
       grid_index = i-num_pads-pad_size;
       kern_index = 0;
@@ -702,29 +706,36 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       iterations = kern_size;
     }
 
-    // Packed SIMD instructions are temporary available only for kernels having a 3 elements row 
-    /*if(iterations == kern_size && kern_width == 3) {
+    // Convolution
+    if(iterations == kern_size) {
+      // Packed SIMD instructions for center elements
       vec_rslt = _mm_setzero_ps();
       vec_mxds = _mm_setzero_ps();
-      for(int i = 0; i < kern_width; i++) {
-        vec_grid = _mm_maskload_ps(&sub_grid[grid_index], mask);
-        vec_kern = _mm_loadu_ps(&kernel[kern_index]);
-        vec_temp = _mm_mul_ps(vec_grid, vec_kern);
-        vec_rslt = _mm_add_ps(vec_rslt, vec_temp);
-        vec_temp = _mm_mul_ps(vec_grid, vec_grid);
-        vec_mxds = _mm_add_ps(vec_mxds, vec_temp);
+      for(int kern_row = 0; kern_row < kern_width; kern_row++) {       // For every kernel row
+        for(offset = 0; offset < kern_width; offset += VEC_SIZE) {     // For every ps_vector in a kernel (and grid) row
+          if(offset + VEC_SIZE < kern_width) {                         // If this isn't the final iteration of this loop, load a full vector
+            vec_grid = _mm_loadu_ps(&sub_grid[grid_index+offset]);
+          } else {
+            vec_grid = _mm_maskload_ps(&sub_grid[grid_index+offset], last_mask);
+          }
+          vec_kern = _mm_loadu_ps(&kernel[kern_index+offset]);
+          vec_temp = _mm_mul_ps(vec_grid, vec_kern);
+          vec_rslt = _mm_add_ps(vec_rslt, vec_temp);
+          vec_temp = _mm_mul_ps(vec_grid, vec_grid);
+          vec_mxds = _mm_add_ps(vec_mxds, vec_temp);
+        }
         grid_index += grid_width;
         kern_index += kern_width;
       }
-      vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);
-      vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);
-      vec_rslt = _mm_hadd_ps(vec_rslt, vec_rslt);
+      vec_rslt = _mm_hadd_ps(vec_rslt, vec_rslt);  // Sum reduction with two horizontal sum
       vec_rslt = _mm_hadd_ps(vec_rslt, vec_rslt);
       result = vec_rslt[0];
+      vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);  // Sum reduction with two horizontal sum
+      vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);
       matrix_dot_sum = vec_mxds[0];
-    } else {*/
-      // Convolution
-      result = 0; offset = 0; matrix_dot_sum = 0;
+    } else {
+      // Standard convolution
+      result = 0; matrix_dot_sum = 0; offset = 0;
       for (int iter=0; iter < iterations; iter++) {
         result += sub_grid[grid_index+offset] * kernel[kern_index+offset];
         matrix_dot_sum += sub_grid[grid_index+offset] * sub_grid[grid_index+offset];
@@ -736,10 +747,10 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
           offset = 0;
         }
       }
-    //}
+    }
 
-    // Normalization (avoid NaN results by assigning the mean value 0 if needed)
-    new_grid[i] = (!matrix_dot_sum) ? 0 : (result / sqrt(matrix_dot_sum * kern_dot_sum));
+    // Normalization (avoid NaN results by assigning the mean value if needed)
+    new_grid[i] = (!matrix_dot_sum) ? MEAN_VALUE : (result / sqrt(matrix_dot_sum * kern_dot_sum));
 
     // Setting row and col indexes for next element
     if (col != grid_width-1)

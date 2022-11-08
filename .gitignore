@@ -47,6 +47,7 @@ conv
 *.idb
 *.pdb
 *test.c
+io-files/result*
 
 # Kernel Module Compile Results
 *.mod*

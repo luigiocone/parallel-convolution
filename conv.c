@@ -553,9 +553,9 @@ void* worker_thread(void* args) {
 /* Test if pad rows are ready. If they are, compute their convolution and send/signal their completion */
 void test_and_update(uint8_t position, uint8_t iter, int* completed, struct mpi_args* margs, struct thread_handler* handler, long_long** meas) {
   int tid;
-  uint8_t index = (iter-1) % 2;
-  uint8_t *rows_to_wait, *rows_to_assert;
-  struct thread_handler* neigh_handler;
+  uint8_t prev_odd = (iter-1) % 2;                // If previous iteration was odd or even
+  uint8_t *rows_to_wait, *rows_to_assert;         // Pointers of flags to wait and signal
+  struct thread_handler* neigh_handler;           // Thread handler of the neighbour thread (tid +- 1)
   long_long *condition_wait_time = meas[0];
   long_long t;
 
@@ -582,42 +582,38 @@ void test_and_update(uint8_t position, uint8_t iter, int* completed, struct mpi_
 
   if(handler->tid == tid && margs != NULL) {
     // In this branch if current thread has distributed memory dependency
-    int outcount, indexes[SIM_REQS];
+    int outcount = 0, indexes[SIM_REQS];
     MPI_Status statuses[SIM_REQS];
     long_long *mpi_mutex_wait_time = meas[2];
 
-    if(!completed[CENTER] || !completed[!position]) {
-      if(!pthread_mutex_trylock(&mutex_mpi)){
-        if(!margs->requests_completed[index + margs->req_offset] || !margs->requests_completed[2 + margs->req_offset]) {
-          MPI_Testsome(SIM_REQS, margs->requests, &outcount, indexes, statuses);
-          for(int i = 0; i < outcount; i++) margs->requests_completed[indexes[i]] = 1;
-        }
-        if(margs->requests_completed[index + margs->req_offset] && margs->requests_completed[2 + margs->req_offset]) {
-          completed[position] = 1;
-          margs->requests_completed[index + margs->req_offset] = 0;
-          margs->requests_completed[2 + margs->req_offset] = 0;
-        }
+    if(!completed[CENTER] || !completed[!position]) {   // If there is still other work to do, trylock and test
+      if((!margs->requests_completed[prev_odd + margs->req_offset] || !margs->requests_completed[2 + margs->req_offset]) && !pthread_mutex_trylock(&mutex_mpi)){
+        MPI_Testsome(SIM_REQS, margs->requests, &outcount, indexes, statuses);
         pthread_mutex_unlock(&mutex_mpi);
+        if(outcount) for(int i = 0; i < outcount; i++) margs->requests_completed[indexes[i]] = 1;
       }
-    }
-
-    if(!completed[position] && completed[!position] && completed[CENTER]) {
+      if(margs->requests_completed[prev_odd + margs->req_offset] && margs->requests_completed[2 + margs->req_offset]) {
+        completed[position] = 1;
+        margs->requests_completed[prev_odd + margs->req_offset] = 0;
+        margs->requests_completed[2 + margs->req_offset] = 0;
+      }
+    } else {                                            // Else, lock and wait
       struct timespec remaining;
-      while(!completed[position]) {
-        t = PAPI_get_real_usec();
-        pthread_mutex_lock(&mutex_mpi);
-        *mpi_mutex_wait_time += PAPI_get_real_usec() - t;
-
-        if(!margs->requests_completed[index + margs->req_offset] || !margs->requests_completed[2 + margs->req_offset]) {
+      while(!completed[position]) {        
+        if(!margs->requests_completed[prev_odd + margs->req_offset] || !margs->requests_completed[2 + margs->req_offset]) {
+          t = PAPI_get_real_usec();
+          pthread_mutex_lock(&mutex_mpi);
+          *mpi_mutex_wait_time += PAPI_get_real_usec() - t;
           MPI_Waitsome(SIM_REQS, margs->requests, &outcount, indexes, statuses);
-          for(int i = 0; i < outcount; i++) margs->requests_completed[indexes[i]] = 1;
+          pthread_mutex_unlock(&mutex_mpi);
+          if(outcount) for(int i = 0; i < outcount; i++) margs->requests_completed[indexes[i]] = 1;
         }
-        if(margs->requests_completed[index + margs->req_offset] && margs->requests_completed[2 + margs->req_offset]) {
+
+        if(margs->requests_completed[prev_odd + margs->req_offset] && margs->requests_completed[2 + margs->req_offset]) {
           completed[position] = 1;
-          margs->requests_completed[index + margs->req_offset] = 0;
+          margs->requests_completed[prev_odd + margs->req_offset] = 0;
           margs->requests_completed[2 + margs->req_offset] = 0;
         }
-        pthread_mutex_unlock(&mutex_mpi);
 
         if(!completed[position]) {
           t = PAPI_get_real_usec();
@@ -635,35 +631,34 @@ void test_and_update(uint8_t position, uint8_t iter, int* completed, struct mpi_
 
     if(!completed[CENTER] || !completed[!position]) {         // If there is still other work to do, trylock insted of lock
       if(!pthread_mutex_trylock(&(neigh_handler->mutex))) {
-        if(rows_to_wait[index]) {
-          rows_to_wait[index] = 0;
+        if(rows_to_wait[prev_odd]) {
+          rows_to_wait[prev_odd] = 0;
           completed[position] = 1;
         }
         pthread_mutex_unlock(&(neigh_handler->mutex));
       }
-    } else {
+    } else {                                                  // Else, lock and wait
       t = PAPI_get_real_usec();
       pthread_mutex_lock(&(neigh_handler->mutex));
       *handler_mutex_wait_time += PAPI_get_real_usec() - t;
 
       t = PAPI_get_real_usec();
-      while(!rows_to_wait[index])
+      while(!rows_to_wait[prev_odd])
         pthread_cond_wait(&(neigh_handler->pad_ready), &(neigh_handler->mutex));
       *condition_wait_time += PAPI_get_real_usec() - t;
-      rows_to_wait[index] = 0;
+      rows_to_wait[prev_odd] = 0;
       pthread_mutex_unlock(&(neigh_handler->mutex));
       completed[position] = 1;
     }
   }
 
   
+  // If test was successful, compute convolution of the tested part
   if(!completed[position]) return;
-
-  // If test was successful, compute convolution of the part tested
   long_long *handler_mutex_wait_time = meas[1];
   long_long *mpi_mutex_wait_time = meas[2];
   float *my_grid, *my_old_grid;
-  if(iter % 2) {
+  if(!prev_odd) {
     my_grid = old_grid;
     my_old_grid = grid;
   } else {
@@ -674,20 +669,20 @@ void test_and_update(uint8_t position, uint8_t iter, int* completed, struct mpi_
   int start = (position == TOP) ? handler->start : handler->end - pad_size;
   conv_subgrid(my_old_grid, my_grid, start, (start + pad_size));
 
+  // Signal/Send pad completion if a next convolution iteration exists
   if(iter+1 == num_iterations) return; 
-  
   if(handler->tid == tid && margs != NULL) {
     t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_mpi);
     mpi_mutex_wait_time += PAPI_get_real_usec() - t;
-    MPI_Isend(&my_grid[margs->send_position], pad_size, MPI_FLOAT, margs->neighbour, 0, MPI_COMM_WORLD, &(margs->requests[(iter % 2) + margs->req_offset]));
+    MPI_Isend(&my_grid[margs->send_position], pad_size, MPI_FLOAT, margs->neighbour, 0, MPI_COMM_WORLD, &(margs->requests[!prev_odd + margs->req_offset]));
     MPI_Irecv(&my_grid[margs->recv_position], pad_size, MPI_FLOAT, margs->neighbour, 0, MPI_COMM_WORLD, &(margs->requests[2 + margs->req_offset]));
     pthread_mutex_unlock(&mutex_mpi);
   } else {
     t = PAPI_get_real_usec();
     pthread_mutex_lock(&(handler->mutex));
     handler_mutex_wait_time += PAPI_get_real_usec() - t;
-    rows_to_assert[iter % 2] = 1;
+    rows_to_assert[!prev_odd] = 1;
     pthread_cond_broadcast(&(handler->pad_ready));
     pthread_mutex_unlock(&(handler->mutex));
   }

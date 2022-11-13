@@ -65,14 +65,17 @@ struct mpi_args {
 void* worker_thread(void*);
 void* grid_input_thread(void*);
 void test_and_update(uint8_t, uint8_t, int*, struct mpi_args*, struct thread_handler*, long_long**);
-void load_balancing(int);
+void load_balancing(int, long_long**);
 void conv_subgrid(float*, float*, int, int);
 void read_kernel(FILE*);
 int stick_this_thread_to_core(int);
 void handle_PAPI_error(int, char*);
 void get_process_additional_row(struct proc_info*);
 void initialize_thread_coordinates(struct thread_handler*);
-void parse_subgrid_and_sync(struct thread_handler*);
+/**** DEBUG PURPOSES ****/
+void save_txt(float*);
+int floats_to_echars(float*, char*, int, int);
+/**** DEBUG PURPOSES ****/
 
 __m128i last_mask;                    // Used by SIMD instructions to discard last elements in contiguous load
 pthread_mutex_t mutex_mpi;            // To call MPI routines in mutual exclusion (will be used only by top and bottom thread)
@@ -353,8 +356,8 @@ int main(int argc, char** argv) {
   long_long* curr_meas;
   for(int i = 0; i < num_threads; i++) {
     curr_meas = thread_measures[i];
-    printf("Thread[%d][%d]: Elapsed: %llu us | Condition WT: %llu us | Handlers mutex WT: %llu us | MPI mutex WT: %llu us | Total L2 cache misses: %lld\n", 
-      rank, i, curr_meas[0], curr_meas[1], curr_meas[2], curr_meas[3], curr_meas[4]);
+    printf("Thread[%d][%d]: Elapsed: %llu us | Condition WT: %llu us | Handlers mutex WT: %llu us | MPI mutex WT: %llu us | LB mutex WT: %llu us | Total L2 cache misses: %lld\n", 
+      rank, i, curr_meas[0], curr_meas[1], curr_meas[2], curr_meas[3], curr_meas[4], curr_meas[5]);
     free(curr_meas);
   }
 
@@ -367,6 +370,7 @@ int main(int argc, char** argv) {
       exit(-1);
     }
     fclose(fp_result);
+    save_txt(res_grid);
   }
 
   // Destroy pthread objects and free all used resources
@@ -456,9 +460,9 @@ void* worker_thread(void* args) {
   if((rc = PAPI_start(event_set)) != PAPI_OK) 
     handle_PAPI_error(rc, "Error in PAPI_start().");
 
-  long_long t, cond_wait_time = 0, handler_mutex_wait_time = 0, mpi_mutex_wait_time = 0;
-  long_long* measures[3] = {&cond_wait_time, &handler_mutex_wait_time, &mpi_mutex_wait_time};
-  long_long* meas_to_return = malloc(sizeof(long_long) * 5);
+  long_long t, cond_wait_time = 0, handler_mutex_wait_time = 0, mpi_mutex_wait_time = 0, lb_mutex_wait_time = 0;
+  long_long* measures[4] = {&cond_wait_time, &handler_mutex_wait_time, &mpi_mutex_wait_time, &lb_mutex_wait_time};
+  long_long* meas_to_return = malloc(sizeof(long_long) * 6);
   long_long time_start = PAPI_get_real_usec();
 
   // Thread setup
@@ -524,7 +528,7 @@ void* worker_thread(void* args) {
 
   // Complete the first convolution iteration by computing central elements
   conv_subgrid(my_old_grid, my_grid, (handler->start + pad_size), (handler->end - pad_size));
-  if(!lb_iter) load_balancing(0);
+  if(!lb_iter) load_balancing(0, measures);
 
   // Second or higher convolution iterations
   for(int iter = 1; iter < num_iterations; iter++) {
@@ -561,7 +565,7 @@ void* worker_thread(void* args) {
     }
 
     // Load balancing if this thread ended current iteration earlier
-    if(iter >= lb_iter) load_balancing(iter);
+    if(iter >= lb_iter) load_balancing(iter, measures);
   }
 
   // Retrieving execution info
@@ -571,8 +575,9 @@ void* worker_thread(void* args) {
  
   meas_to_return[1] = cond_wait_time; 
   meas_to_return[2] = handler_mutex_wait_time; 
-  meas_to_return[3] = mpi_mutex_wait_time; 
-  meas_to_return[4] = num_cache_miss;
+  meas_to_return[3] = mpi_mutex_wait_time;
+  meas_to_return[4] = lb_mutex_wait_time;
+  meas_to_return[5] = num_cache_miss;
   meas_to_return[0] = (PAPI_get_real_usec() - time_start);
   thread_measures[handler->tid] = meas_to_return;
 
@@ -580,10 +585,14 @@ void* worker_thread(void* args) {
   return 0;
 }
 
-void load_balancing(int iter){
+/* Threads that ended their iteration earlier will compute a shared portion of the matrix */
+void load_balancing(int iter, long_long** meas){
   int start = 0, end = 0;
   uint8_t prev_odd = (iter-1) % 2;
   int lb_num_rows = (load_balancer->end - load_balancer->start) / grid_width;
+  long_long t;
+  long_long *handlers_mutex_wait_time = meas[1];
+  long_long *lb_mutex_wait_time = meas[3];
 
   float *my_grid, *my_old_grid;
   if(!prev_odd) {
@@ -596,7 +605,9 @@ void load_balancing(int iter){
 
   // Compute a row of the load_balancer shared work 
   while(iter >= lb_iter) {
+    t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_lb);
+    *lb_mutex_wait_time += PAPI_get_real_usec() - t;
     while(iter > lb_iter)
       pthread_cond_wait(&lb_iter_completed, &mutex_lb);    // Wait if lb work of previous iteration is not completed yet
     if(iter == lb_iter) {
@@ -610,7 +621,9 @@ void load_balancing(int iter){
     // If my shared work is in the middle, no dependencies
     if(start >= (load_balancer->start + pad_size) && end <= (load_balancer->end - pad_size)) {
       conv_subgrid(my_old_grid, my_grid, start, end);
+      t = PAPI_get_real_usec();
       pthread_mutex_lock(&mutex_lb);
+      *lb_mutex_wait_time += PAPI_get_real_usec() - t;
       lb_completed++;                                      // Track the already computed row
       if(lb_completed == lb_num_rows) {                    // All shared works have been completed
         lb_completed = 0;
@@ -639,7 +652,9 @@ void load_balancing(int iter){
     }
 
     if(iter > 0) {
+      t = PAPI_get_real_usec();
       pthread_mutex_lock(&(neigh_handler->mutex));
+      *handlers_mutex_wait_time += PAPI_get_real_usec() - t;
       while(!rows_to_wait[prev_odd])
         pthread_cond_wait(&(neigh_handler->pad_ready), &(neigh_handler->mutex));
       pthread_mutex_unlock(&(neigh_handler->mutex));
@@ -650,7 +665,9 @@ void load_balancing(int iter){
 
     // Track pad completion and signal neighbour thread
     if(iter > 0) {
+      t = PAPI_get_real_usec();
       pthread_mutex_lock(&(load_balancer->mutex));
+      *handlers_mutex_wait_time += PAPI_get_real_usec() - t;
       (*pad_counter)++;
       if(*pad_counter == num_pads) {
         rows_to_wait[prev_odd] = 0;
@@ -671,7 +688,9 @@ void load_balancing(int iter){
     }
 
     // Track row completion
+    t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_lb);
+    *lb_mutex_wait_time += PAPI_get_real_usec() - t;
     lb_completed++;                                      // Track the already computed row
     if(lb_completed == lb_num_rows) {                    // All shared works have been completed
       lb_completed = 0;
@@ -1017,4 +1036,36 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
   handler->start = pad_size + tid * size + start_offset * grid_width;
   handler->end = handler->start + size;
   if(thread_additional_row) handler->end += grid_width;
+}
+
+/**** DEBUG PURPOSES ****/
+void save_txt(float* res_grid){
+    FILE* fp_result_txt;
+    if((fp_result_txt = fopen("./io-files/result.txt", "w")) == NULL) {
+      fprintf(stderr, "Error while opening result debug file\n");
+      exit(-1);
+    }
+    char* temp_buffer = malloc(sizeof(char) * (grid_size*2) * (13 + 1));
+    int count = floats_to_echars(&res_grid[pad_size], temp_buffer, grid_size, grid_width);
+    fwrite(temp_buffer, count, sizeof(char), fp_result_txt);
+    free(temp_buffer);
+    fclose(fp_result_txt);
+}
+
+int floats_to_echars(float *float_buffer, char* char_buffer, int count, int row_len) {
+  int limit = row_len-1;
+  int stored = 0;
+
+  for(int fetched = 0; fetched < count; fetched++){
+    stored += sprintf(&char_buffer[stored], "%+e", float_buffer[fetched]);  // to replace with ftoa
+    if (fetched == limit) {
+      limit += row_len;
+      char_buffer[stored] = '\n';
+    } else {
+      char_buffer[stored] = ' ';
+    }
+    stored++;
+  }
+
+  return stored;
 }

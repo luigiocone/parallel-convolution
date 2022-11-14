@@ -103,10 +103,9 @@ struct thread_handler* load_balancer; // Used by worker threads to do some addit
 pthread_mutex_t mutex_lb;             // Used to access at shared variable of the load balancing
 pthread_cond_t lb_iter_completed;     // In some cases a thread could access to load_balancer while previous lb_iter was not completed
 int lb_iter;                          // Used in load balancing to track current iteration
-int lb_to_do;                         // To track how many load balancer rows have been reserved (but not yet computed)
-int lb_completed;                     // To track how many load balancer rows have been computed
+int lb_curr_start;                    // To track how many load balancer rows have been reserved (but not yet computed)
+int lb_rows_completed;                // To track how many load balancer rows have been computed
 int lb_top_pad, lb_bot_pad;           // To track how many load balancer pad rows have been computed
-
 long_long** thread_measures;          // To collect thread measures
 const struct timespec WAIT_TIME = {   // Wait time used by MPI threads
   .tv_sec = 0, 
@@ -293,8 +292,8 @@ int main(int argc, char** argv) {
   pthread_mutex_init(&(load_balancer->mutex), NULL);
   pthread_cond_init(&(load_balancer->pad_ready), NULL);
   initialize_thread_coordinates(load_balancer);
-  lb_to_do = load_balancer->start;
-  lb_iter = 0; lb_completed = 0;
+  lb_curr_start = load_balancer->start;
+  lb_iter = 0; lb_rows_completed = 0;
   lb_top_pad = 0; lb_bot_pad = 0;
   thread_measures = malloc(sizeof(long_long*) * num_threads);
 
@@ -588,8 +587,8 @@ void* worker_thread(void* args) {
 /* Threads that ended their iteration earlier will compute a shared portion of the matrix */
 void load_balancing(int iter, long_long** meas){
   int start = 0, end = 0;
-  uint8_t prev_odd = (iter-1) % 2;
-  int lb_num_rows = (load_balancer->end - load_balancer->start) / grid_width;
+  uint8_t prev_odd = (!iter) ? 1 : (iter-1) % 2;
+  int lb_num_rows = (load_balancer->end - load_balancer->start) / grid_width ;
   long_long t;
   long_long *handlers_mutex_wait_time = meas[1];
   long_long *lb_mutex_wait_time = meas[3];
@@ -605,14 +604,15 @@ void load_balancing(int iter, long_long** meas){
 
   // Compute a row of the load_balancer shared work 
   while(iter >= lb_iter) {
+    start = 0;
     t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_lb);
     *lb_mutex_wait_time += PAPI_get_real_usec() - t;
     while(iter > lb_iter)
       pthread_cond_wait(&lb_iter_completed, &mutex_lb);    // Wait if lb work of previous iteration is not completed yet
     if(iter == lb_iter) {
-      start = lb_to_do;
-      lb_to_do += grid_width;                              // From lb->start to lb->end
+      start = lb_curr_start;
+      lb_curr_start += grid_width;                         // From lb->start to lb->end
     }
     pthread_mutex_unlock(&mutex_lb);
     end = start + grid_width;
@@ -624,10 +624,10 @@ void load_balancing(int iter, long_long** meas){
       t = PAPI_get_real_usec();
       pthread_mutex_lock(&mutex_lb);
       *lb_mutex_wait_time += PAPI_get_real_usec() - t;
-      lb_completed++;                                      // Track the already computed row
-      if(lb_completed == lb_num_rows) {                    // All shared works have been completed
-        lb_completed = 0;
-        lb_to_do = load_balancer->start;
+      lb_rows_completed++;                                      // Track the already computed row
+      if(lb_rows_completed == lb_num_rows) {                    // All shared works have been completed
+        lb_rows_completed = 0;
+        lb_curr_start = load_balancer->start;
         lb_iter++;
         pthread_cond_broadcast(&lb_iter_completed);
       }
@@ -651,6 +651,7 @@ void load_balancing(int iter, long_long** meas){
       pad_counter = &lb_bot_pad;
     }
 
+    // Wait if neighbours are late
     if(iter > 0) {
       t = PAPI_get_real_usec();
       pthread_mutex_lock(&(neigh_handler->mutex));
@@ -661,10 +662,8 @@ void load_balancing(int iter, long_long** meas){
     }
     conv_subgrid(my_old_grid, my_grid, start, end);
 
-    if(iter+1 == num_iterations) continue;
-
     // Track pad completion and signal neighbour thread
-    if(iter > 0) {
+    if(iter+1 < num_iterations) {
       t = PAPI_get_real_usec();
       pthread_mutex_lock(&(load_balancer->mutex));
       *handlers_mutex_wait_time += PAPI_get_real_usec() - t;
@@ -676,25 +675,16 @@ void load_balancing(int iter, long_long** meas){
         pthread_cond_broadcast(&(load_balancer->pad_ready));
       }
       pthread_mutex_unlock(&(load_balancer->mutex));
-    } else if (!iter) {
-      pthread_mutex_lock(&(load_balancer->mutex));
-      (*pad_counter)++;
-      if(*pad_counter == num_pads) {
-        rows_to_assert[0] = 1;
-        *pad_counter = 0;
-        pthread_cond_broadcast(&(load_balancer->pad_ready));
-      }
-      pthread_mutex_unlock(&(load_balancer->mutex));
     }
 
     // Track row completion
     t = PAPI_get_real_usec();
     pthread_mutex_lock(&mutex_lb);
     *lb_mutex_wait_time += PAPI_get_real_usec() - t;
-    lb_completed++;                                      // Track the already computed row
-    if(lb_completed == lb_num_rows) {                    // All shared works have been completed
-      lb_completed = 0;
-      lb_to_do = load_balancer->start;
+    lb_rows_completed++;                                      // Track the already computed row
+    if(lb_rows_completed == lb_num_rows) {                    // All shared works have been completed
+      lb_rows_completed = 0;
+      lb_curr_start = load_balancer->start;
       lb_iter++;
       pthread_cond_broadcast(&lb_iter_completed);
     }

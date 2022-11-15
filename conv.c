@@ -46,7 +46,7 @@ struct proc_info {
 struct io_thread_args {
   FILE* fp_grid;                      // File containing input grid
   MPI_Request request;                // Used by rank different from 0 to wait the receiving of grid data
-  uint8_t grid_ready;                 // True if the grid is in local memory
+  uint8_t grid_ready;                 // True if the process grid portion has been loaded/received
   pthread_mutex_t mutex;              // Mutex to access shared variables beetween main thread and io thread
   pthread_cond_t cond;                // Necessary one synchronization point beetween main thread and io thread
   struct proc_info* procs_info;       // Info used for MPI distribution of grid
@@ -106,6 +106,8 @@ int lb_iter;                          // Used in load balancing to track current
 int lb_curr_start;                    // To track how many load balancer rows have been reserved (but not yet computed)
 int lb_rows_completed;                // To track how many load balancer rows have been computed
 int lb_top_pad, lb_bot_pad;           // To track how many load balancer pad rows have been computed
+int lb_size;                          // Number of elements in load balancer submatrix
+int lb_num_rows;                      // Number of rows in load balancer submatrix
 long_long** thread_measures;          // To collect thread measures
 const struct timespec WAIT_TIME = {   // Wait time used by MPI threads
   .tv_sec = 0, 
@@ -292,7 +294,7 @@ int main(int argc, char** argv) {
   pthread_mutex_init(&(load_balancer->mutex), NULL);
   pthread_cond_init(&(load_balancer->pad_ready), NULL);
   initialize_thread_coordinates(load_balancer);
-  lb_curr_start = load_balancer->start;
+  lb_curr_start = load_balancer->start + pad_size;                 // Start from submatrix with no dependencies
   lb_iter = 0; lb_rows_completed = 0;
   lb_top_pad = 0; lb_bot_pad = 0;
   thread_measures = malloc(sizeof(long_long*) * num_threads);
@@ -586,9 +588,8 @@ void* worker_thread(void* args) {
 
 /* Threads that ended their iteration earlier will compute a shared portion of the matrix */
 void load_balancing(int iter, long_long** meas){
-  int start = 0, end = 0;
-  uint8_t prev_odd = (!iter) ? 1 : (iter-1) % 2;
-  int lb_num_rows = (load_balancer->end - load_balancer->start) / grid_width ;
+  const uint8_t prev_odd = (!iter) ? 1 : (iter-1) % 2;
+  uint start = 0, end = 0;
   long_long t;
   long_long *handlers_mutex_wait_time = meas[1];
   long_long *lb_mutex_wait_time = meas[3];
@@ -609,14 +610,14 @@ void load_balancing(int iter, long_long** meas){
     pthread_mutex_lock(&mutex_lb);
     *lb_mutex_wait_time += PAPI_get_real_usec() - t;
     while(iter > lb_iter)
-      pthread_cond_wait(&lb_iter_completed, &mutex_lb);    // Wait if lb work of previous iteration is not completed yet
+      pthread_cond_wait(&lb_iter_completed, &mutex_lb);         // Wait if lb work of previous iteration is not completed yet
     if(iter == lb_iter) {
       start = lb_curr_start;
-      lb_curr_start += grid_width;                         // From lb->start to lb->end
+      lb_curr_start += grid_width;                              // From lb->start to lb->end
     }
     pthread_mutex_unlock(&mutex_lb);
     end = start + grid_width;
-    if(!start || end > load_balancer->end) return;         // All shared works have been reserved, return to private work
+    if(!start || end > load_balancer->end + pad_size) return;   // All shared works have been reserved, return to private work
 
     // If my shared work is in the middle, no dependencies
     if(start >= (load_balancer->start + pad_size) && end <= (load_balancer->end - pad_size)) {
@@ -627,12 +628,18 @@ void load_balancing(int iter, long_long** meas){
       lb_rows_completed++;                                      // Track the already computed row
       if(lb_rows_completed == lb_num_rows) {                    // All shared works have been completed
         lb_rows_completed = 0;
-        lb_curr_start = load_balancer->start;
+        lb_curr_start = load_balancer->start + pad_size;
         lb_iter++;
         pthread_cond_broadcast(&lb_iter_completed);
       }
       pthread_mutex_unlock(&mutex_lb);
       continue;
+    }
+
+    // If only the top matrix portion is left
+    if(end > load_balancer->end) {
+      start -= lb_size;
+      end -= lb_size;
     }
 
     // Dependencies handling
@@ -684,7 +691,7 @@ void load_balancing(int iter, long_long** meas){
     lb_rows_completed++;                                      // Track the already computed row
     if(lb_rows_completed == lb_num_rows) {                    // All shared works have been completed
       lb_rows_completed = 0;
-      lb_curr_start = load_balancer->start;
+      lb_curr_start = load_balancer->start + pad_size;
       lb_iter++;
       pthread_cond_broadcast(&lb_iter_completed);
     }
@@ -995,37 +1002,42 @@ void get_process_additional_row(struct proc_info* procs_info) {
 /* 
  * Initialize the coordinates (starting and ending position) of the submatrix that should be computed by
  * a thread. If the number of threads is not a divider of the number of rows assigned to this process, 
- * distribute those additional rows starting from the center thread. 
- * 
- * For example, for 8 threads the assignment order of the additional rows would be: 
- * TID  : 0, 1, 2, 3, 4, 5, 6, 7
- * Order: 7, 5, 3, 1, 0, 2, 4, 6  
+ * distribute those additional rows in the load_balancer submatrix. 
 */
 void initialize_thread_coordinates(struct thread_handler* handler) {
-  int nt = num_threads + 1;
-  int tid = handler->tid + ((handler->tid >= num_threads/2) ? 1 : 0); 
-  if(handler->tid < 0) tid = num_threads/2;
+  // Load balancer (tid == -1) it's placed in the center of the whole matrix
+  int submatrix_id;
+  if(handler->tid >= 0) {
+    submatrix_id = handler->tid;
+    if(handler->tid >= num_threads/2) submatrix_id++; 
+  } else {
+    submatrix_id = num_threads/2;
+    lb_num_rows = num_threads;
+    if (lb_num_rows < num_pads * 2) lb_num_rows += (num_pads * 2);
+  }
 
-  // Additional rows that need to be distributed between threads
-  const int addrows = proc_assigned_rows % nt;
-  const int fixed_rows_per_thread = proc_assigned_rows / nt;
-  const int offset_from_center = tid - nt/2;
-  const int order = abs(offset_from_center) * 2 - ((offset_from_center >= 0) ? 0 : 1);
-  const uint8_t thread_additional_row = addrows > order;
-
-  // Previous thread may compute an additional row, compute how many additional rows for every thread
-  int start_offset = addrows / 2;
-  if(offset_from_center > 0) {
-    for(int i = 2; (i <= order) && (addrows+1 >= i); i+=2) start_offset++;
-  } else if (offset_from_center < 0) {
-    for(int i = 1; (i <= order) && (addrows > i); i+=2) start_offset--;
+  // Additional rows that will be assigned to load balancer
+  const int addrows = (proc_assigned_rows - lb_num_rows) % num_threads;
+  const int fixed_rows_per_thread = (proc_assigned_rows - lb_num_rows) / num_threads;
+  if(handler->tid < 0) { 
+    lb_num_rows += addrows;
+    lb_size = lb_num_rows * grid_width;
   }
 
   // Initialize coordinates
-  const int size = fixed_rows_per_thread * grid_width;
-  handler->start = pad_size + tid * size + start_offset * grid_width;
-  handler->end = handler->start + size;
-  if(thread_additional_row) handler->end += grid_width;
+  const int fixed_size = fixed_rows_per_thread * grid_width;
+  int start_offset = submatrix_id * fixed_size;
+  int actual_size; 
+  if (handler->tid >= 0) {
+    actual_size = fixed_size;
+    if(submatrix_id > num_threads/2) 
+      start_offset = start_offset - fixed_size + lb_size;
+  } else {
+    actual_size = lb_size;
+  }
+
+  handler->start = pad_size + start_offset;
+  handler->end = handler->start + actual_size;
 }
 
 /**** DEBUG PURPOSES ****/

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# = 0 ]; then
-    mpirun -np 4 ./conv 2
+    mpirun -np 1 ./conv 1 2
     exit $?
 fi
 
@@ -10,7 +10,7 @@ WORKSPACE="/home/ocone/convolution"
 
 case $1 in
   hpc)       # Cluster only
-    mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 2 16
+    mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 500 16 1
     ;;
 
   paranoid)   # Temporary reduce paranoid level to allow cache event counters (PAPI)
@@ -22,7 +22,7 @@ case $1 in
     ;;
 
   send)      # Transfer source code, makefile, and run.sh to cluster
-    scp -P 22001 conv.c Makefile run.sh $CLUSTER_UNISANNIO:$WORKSPACE
+    scp -P 22001 conv.c $CLUSTER_UNISANNIO:$WORKSPACE
     ;;
 
   receive)   # Transfer .clog2 file from cluster to local machine
@@ -30,21 +30,8 @@ case $1 in
     ;;
   
   clean)
-    rm -f conv conv.clog2 conv.slog2
+    rm -f conv*
     pkill -u ocone
-    ;;
-  
-  createlog) # Create a .clog2 file. Java commands must be executed on local machine 
-    mpecc conv.c -o conv /usr/local/lib/libpapi.a -lm -lpthread -mpilog -std=gnu11 -Wall -O3
-    mpirun --mca btl self,openib -np 4 -machinefile mf ./conv 2 16
-    ;;
-
-  convert)   # Convert .clog2 to .slog2 file
-    java -jar clog2TOslog2.jar conv.clog2
-    ;;
-
-  showlog)
-    java -jar jumpshot.jar conv.slog2
     ;;
 
   *)

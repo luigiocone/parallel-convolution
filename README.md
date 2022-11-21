@@ -25,13 +25,21 @@ Also, nodes are interconnected with a low-latency network (InfiniBand) at 56 Gb/
 
 ## How to run
 Dependencies: 
-- `MPI` (e.g. MPICH) 
+- `MPI` (e.g. MPICH)
 - `PAPI` 
 
-Once installed, digit: 
+Once dependencies have been installed, digit:  
+```
+make
+mpirun [mpi_options] ./conv [num_iters] [num_threads]
+```
+Or else:
 ```
 make && ./run.sh
 ```
+Shell file `run.sh` execute the following command: `mpirun -np 1 ./conv 1 2`
+
+## Plot the result
 If source matrix is an image, source and result images could be plot with python:
 ```
 cd script

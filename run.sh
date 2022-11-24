@@ -5,19 +5,26 @@ if [ $# = 0 ]; then
     exit $?
 fi
 
+# Cluster workspace
 WORKSPACE="/home/ocone/convolution"
-# $CLUSTER_UNISANNIO is an environment variable
 
 case $1 in
   hpc)       # Cluster only
     mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 500 16 1
     ;;
 
-  paranoid)   # Temporary reduce paranoid level to allow cache event counters (PAPI)
+  papi)      # Temporary reduce paranoid level to allow cache event counters (PAPI)
     sudo sh -c 'echo 2 >/proc/sys/kernel/perf_event_paranoid'
     ;;
 
-  connect)   # Connect to cluster
+  test)      # Check results differences between sequential and parallel version
+    SEQ_PATH="/home/luigi/Desktop/seq/io-files/result.txt"
+    PAR_PATH="/home/luigi/Desktop/parallel-convolution/io-files/result.txt"
+    echo "wrong lines: "
+    diff $PAR_PATH $SEQ_PATH | grep '^[1-9]'
+    ;;
+
+  connect)   # Connect to cluster ($CLUSTER_UNISANNIO is an environment variable)
     ssh -p 22001 $CLUSTER_UNISANNIO
     ;;
 

@@ -2,7 +2,6 @@
 // Name: Tanay Agarwal, Nirmal Krishnan
 // JHED: tagarwa2, nkrishn9
 
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -11,8 +10,8 @@
 #include <papi.h>
 #include <mpi.h>
 #include <pthread.h>
-#include <unistd.h>
 #include <immintrin.h>
+#include "./include/convutils.h"
 
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_THREADS 2
@@ -24,55 +23,6 @@
 #define SIM_REQS 6                    // Per-process simultaneous MPI requests
 #define ROWS_BEFORE_POLLING 2         // How many rows must be computed before polling the neighbours
 #define MAIN_THREAD_OFFLOAD 2         // Will be subtracted at main thread number of rows
-#define DATA_TO_PREPARE 4
-
-struct thread_handler {               // Used by active threads to handle a matrix portion and to synchronize with neighbours
-  int tid;                            // Custom thread ID, not the one returned by "pthread_self()"
-  uint start, end;                    // Matrix area of ​​interest for this thread
-  uint8_t top_rows_done[2];           // Flags for curr and next iteration. "True" if this thread has computed its top rows
-  uint8_t bot_rows_done[2];
-  struct thread_handler* top;         // To exchange information about pads with neighbour threads
-  struct thread_handler* bottom;
-  pthread_mutex_t mutex;              // Mutex to access this handler
-  pthread_cond_t pad_ready;           // Thread will wait if neighbour's top and bottom rows (pads) aren't ready
-};
-
-struct proc_info {                    // Info about data scattering and gathering
-  uint8_t has_additional_row;         // If this process must compute an additional row
-  uint start, size;                   // Used for initial and final MPI send/recv. Grid start position and payload size
-};
-
-struct setup_args {
-  MPI_Request requests[2];            // Used for grid and kernel receive
-  uint8_t flags[DATA_TO_PREPARE];     // Describes if a data structure is ready to be used
-  pthread_t* threads;                 // Worker threads
-  struct proc_info* procs_info;       // Info used for MPI distribution of grid
-  struct thread_handler* handlers;    // Thread handlers of main and worker threads
-  pthread_mutex_t mutex;              // Mutex to access shared variables beetween main and setup thread
-  pthread_cond_t cond;                // Necessary some synchronization points beetween main and setup thread
-};
-
-struct mpi_args {
-  uint send_position;                 // Grid position of the payload fetched by MPI
-  uint recv_position;                 // Grid position where the payload received (through MPI) should be stored
-  MPI_Request* requests;              // Pointer to process MPI requests
-  int* requests_completed;            // Pointer to process log of completed MPI requests
-  int neighbour;                      // MPI rank of the neighbour process
-  uint8_t req_offset;                 // Used to reference the correct request by a thread
-};
-
-enum POSITIONS {                      // Submatrix positions of interests for dependencies handling
-    TOP = 0,
-    BOTTOM = 1,
-    CENTER = 2
-};
-
-enum DATA {                           // Data that setup thread must prepare before starting convolution
-    GRID = 0,
-    KERNEL = 1,
-    HANDLERS = 2,
-    SEND_INFO = 3
-};
 
 void* main_thread(void*);
 void* worker_thread(void*);
@@ -81,14 +31,8 @@ void test_and_update(uint8_t, uint8_t, int*, struct mpi_args*, struct thread_han
 void load_balancing(int, uint8_t, long_long**);
 void conv_subgrid(float*, float*, int, int);
 void read_kernel(FILE*);
-int stick_this_thread_to_core(int);
-void handle_PAPI_error(int, char*);
 void get_process_additional_row(struct proc_info*);
 void initialize_thread_coordinates(struct thread_handler*);
-/**** DEBUG PURPOSES ****/
-void save_txt(float*);
-int floats_to_echars(float*, char*, int, int);
-/**** DEBUG PURPOSES ****/
 
 float *kernel;                        // Kernel used for convolution
 float *new_grid;                      // Input/Result grid, swapped at every iteration
@@ -164,7 +108,7 @@ int main(int argc, char** argv) {
   setup.threads = threads;
   setup.procs_info = procs_info;
   load_balancer = &(struct thread_handler){0};                // Load balancer is not an active thread, this structure is used by all workers
-  memset(setup.flags, 0, sizeof(uint8_t) * DATA_TO_PREPARE);  // Used as flag, will be different from 0 only after the grid is ready to be convoluted
+  memset(setup.flags, 0, sizeof(uint8_t) * (SEND_INFO+1));    // Used as flag, will be different from 0 only after the grid is ready to be convoluted
   pthread_mutex_init(&(setup.mutex), NULL);                   // Used by io_thread and main thread to synchronize
   pthread_cond_init(&(setup.cond), NULL);
 
@@ -496,7 +440,6 @@ void* init_vars(void* args) {
   // PThreads creation
   for(int i = 0; i < num_threads; i++) {
     if(i == num_threads/2) continue;
-    //printf("lb: %6d-%6d | lb->top: %d | lb->bot: %d\n", lb_curr_start- pad_elems, lb_curr_start+lb_size-pad_elems, load_balancer->top->tid, load_balancer->bottom->tid);
     int rc = pthread_create(&setup.threads[i], NULL, worker_thread, (void*)&handlers[i]);
     if(rc) { 
       fprintf(stderr, "Error while creating pthread 'worker_thread[%d]'; Return code: %d\n", i, rc);
@@ -1126,31 +1069,6 @@ void read_kernel(FILE *fp_kernel){
   }
 }
 
-/* Print the appropriate message in case of PAPI error */
-void handle_PAPI_error(int rc, char *msg) {
-  char error_str[PAPI_MAX_STR_LEN];
-  memset(error_str, 0, sizeof(char) * PAPI_MAX_STR_LEN);
-
-  fprintf(stderr, "%s\nReturn code: %d - PAPI error message:\n", msg, rc);
-  PAPI_perror(error_str);
-  PAPI_strerror(rc);
-  exit(-1);
-}
-
-/* Set thread affinity. If there are more threads than cores, no affinity will be set */
-int stick_this_thread_to_core(int core_id) {
-  const long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
-  if(num_threads > num_cores) return 0;
-  if(core_id < 0) return 1;
-  if((num_threads * 2) <= num_cores) core_id++;   // Trying to avoid hyperthreading in a bad way
-
-  cpu_set_t cpuset;
-  CPU_ZERO(&cpuset);
-  CPU_SET(core_id, &cpuset);
-
-  return pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-}
-
 /* 
  * Return if this process should compute an additional row. This happens if the number of processes is
  * not a divider of the total number of rows of the input matrix. If the calling rank is 0, it also 
@@ -1243,36 +1161,4 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
 
   if(rank) handler->start += pad_elems;
   handler->end = handler->start + actual_size; 
-}
-
-/**** DEBUG PURPOSES ****/
-void save_txt(float* res_grid){
-    FILE* fp_result_txt;
-    if((fp_result_txt = fopen("./io-files/result.txt", "w")) == NULL) {
-      fprintf(stderr, "Error while opening result debug file\n");
-      exit(-1);
-    }
-    char* temp_buffer = malloc(sizeof(char) * (grid_elems*2) * (13 + 1));
-    int count = floats_to_echars(&res_grid[pad_elems], temp_buffer, grid_elems, grid_width);
-    fwrite(temp_buffer, count, sizeof(char), fp_result_txt);
-    fclose(fp_result_txt);
-    free(temp_buffer);
-}
-
-int floats_to_echars(float *float_buffer, char* char_buffer, int count, int row_len) {
-  int limit = row_len-1;
-  int stored = 0;
-
-  for(int fetched = 0; fetched < count; fetched++){
-    stored += sprintf(&char_buffer[stored], "%+e", float_buffer[fetched]);  // to replace with ftoa
-    if (fetched == limit) {
-      limit += row_len;
-      char_buffer[stored] = '\n';
-    } else {
-      char_buffer[stored] = ' ';
-    }
-    stored++;
-  }
-
-  return stored;
 }

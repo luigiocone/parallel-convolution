@@ -1,5 +1,6 @@
 #ifndef CONVUTILS_H
 #define CONVUTILS_H
+#define SIM_REQS 6                    // Per-process max number of simultaneous MPI requests
 
 enum POSITIONS {                      // Submatrix positions of interests for dependencies handling
     TOP = 0,
@@ -40,13 +41,22 @@ struct setup_args {
   pthread_cond_t cond;                // Necessary some synchronization points beetween main and setup thread
 };
 
-struct mpi_args {
-  uint send_position;                 // Grid position of the payload fetched by MPI
-  uint recv_position;                 // Grid position where the payload received (through MPI) should be stored
-  MPI_Request* requests;              // Pointer to process MPI requests
-  int* requests_completed;            // Pointer to process log of completed MPI requests
-  int neighbour;                      // MPI rank of the neighbour process
-  uint8_t req_offset;                 // Used to reference the correct request by a thread
+struct node_data {                    // Data used to interact with distributed memory neighbours
+  MPI_Request requests[SIM_REQS];     // There are at most two "Isend" and one "Irecv" not completed at the same time per worker_thread, hence six per process
+  MPI_Status statuses[SIM_REQS];
+  int requests_completed[SIM_REQS];   // Log of completed MPI requests
+  uint send_position[2];              // Grid position of data that will be sent by MPI
+  uint recv_position[2];              // Where the payload received (through MPI) should be stored
+  int neighbour[2];                   // MPI rank of the neighbour process (TOP and BOTTOM)
+  uint8_t req_offset[2];              // Used to reference the correct request
+};
+
+struct local_data {                   // Data used to interact with shared memory neighbours
+  struct thread_handler* self;        // Handler of communication promoter
+  int completed[CENTER+1];            // Matrix completed positions. Indexed through enumeration (TOP, BOTTOM, ...)
+  struct thread_handler* neigh[2];    // Handlers of neighbour thread (TOP and BOTTOM)
+  uint8_t* rows_to_wait[2];           // Pointers to the flag to wait (TOP and BOTTOM)
+  uint8_t* rows_to_assert[2];         // Pointers to the flag to signal (TOP and BOTTOM)
 };
 
 struct load_balancer {

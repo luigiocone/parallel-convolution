@@ -59,15 +59,15 @@ struct local_data {                   // Data used to interact with shared memor
   uint8_t* rows_to_assert[2];         // Pointers to the flag to signal (TOP and BOTTOM)
 };
 
-struct load_balancer {
-  struct thread_handler* handler;     // Used by worker threads to do some additional work if they end earlier. Not an active thread 
+struct load_balancer {                // Used by worker threads to do some additional work if they end earlier. Not an active thread
+  struct thread_handler* handler;     // Load balancer have neighbour dependecies too
   pthread_mutex_t mutex;              // Used to access at shared variable of the load balancing
   pthread_cond_t iter_completed;      // In some cases a thread could access to load_balancer while previous lb_iter was not completed
   uint iter;                          // Used in load balancing to track current iteration
   uint curr_start;                    // To track how many load balancer rows have been reserved (but not yet computed)
   uint rows_completed;                // To track how many load balancer rows have been computed
   uint top_pad, bot_pad;              // To track how many load balancer pad rows have been computed
-  uint num_rows, size;                // Number of rows in load balancer submatrix (i.e. handled dynamically for load balancing)
+  uint nrows, size;                   // Number of rows in load balancer submatrix (i.e. handled dynamically for load balancing)
 };
 
 int stick_this_thread_to_core(int);             // Thread affinity

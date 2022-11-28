@@ -21,11 +21,10 @@
 #define VEC_SIZE 4
 #define MEAN_VALUE 0
 #define ROWS_BEFORE_POLLING 2         // How many rows must be computed before polling the neighbours
-#define MAIN_THREAD_OFFLOAD 2         // Will be subtracted at main thread number of rows
 
-void* main_thread(void*);
-void* worker_thread(void*);
-void* init_vars(void*);
+void *coordinator_thread(void*);
+void *worker_thread(void*);
+void *setup_thread(void*);
 void thread_polling(uint8_t, uint, struct local_data*, long_long**);
 void node_polling(uint8_t, uint, struct local_data*, struct node_data*, long_long**);
 void wait_protocol(uint, struct local_data*, struct node_data*, long_long**);
@@ -46,20 +45,11 @@ uint num_pads;                        // Number of rows that should be shared wi
 uint pad_elems;                       // Number of elements in the pad section of the grid matrix
 uint kern_elems;                      // Number of elements in whole kernel matrix
 uint grid_elems;                      // Number of elements in whole grid matrix
-uint proc_num_rows;                   // Number of rows assigned to a process
-uint proc_static_work_rows;           // Number of rows not owned by load_balancer
-// Load balancing global variables
-struct thread_handler* load_balancer; // Used by worker threads to do some additional work if they end earlier. Not an active thread 
-pthread_mutex_t mutex_lb;             // Used to access at shared variable of the load balancing
-pthread_cond_t lb_iter_completed;     // In some cases a thread could access to load_balancer while previous lb_iter was not completed
-uint lb_iter;                         // Used in load balancing to track current iteration
-uint lb_curr_start;                   // To track how many load balancer rows have been reserved (but not yet computed)
-uint lb_rows_completed;               // To track how many load balancer rows have been computed
-uint lb_top_pad, lb_bot_pad;          // To track how many load balancer pad rows have been computed
-uint lb_size;                         // Number of elements in load balancer submatrix
-uint lb_num_rows;                     // Number of rows in load balancer submatrix (i.e. handled dynamically for load balancing)
-// MPI, Pthreads, and PSMID global variables
+uint proc_nrows;                      // Number of rows assigned to a process
+uint static_work_nrows;               // Number of rows assigned to a process and distributed to all workers (hence not owned by load_balancer)
+uint coordinator_nrows;               // Subpart of load_balancer rows that coordinator should compute
 struct setup_args setup;              // Used by setup, worker, and main threads to synchronize about grid read
+struct load_balancer lb;              // Structure containing all synchronization variables used during load balancing 
 long_long** thread_measures;          // To collect thread measures
 int num_procs;                        // Number of MPI processes in the communicator
 int num_threads;                      // Number of threads (main included) for every MPI process
@@ -104,11 +94,12 @@ int main(int argc, char** argv) {
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   time_start = PAPI_get_real_usec();
   
-  pthread_t threads[num_threads];                             // Worker threads except the middle one (num_threads/2) used as setup thread while main is reading from disk
   struct proc_info procs_info[(rank) ? 1 : num_procs];
+  pthread_t threads[num_threads];                             // Worker threads except the middle one (num_threads/2) used as setup thread while main is reading from disk
+  lb = (struct load_balancer){0};                             // Load balancer is not an active thread. This structure is used by all workers
+  lb.handler = &(struct thread_handler){0};                   // Used to synchronize with neighbour threads
   setup.threads = threads;
   setup.procs_info = procs_info;
-  load_balancer = &(struct thread_handler){0};                // Load balancer is not an active thread, this structure is used by all workers
   memset(setup.flags, 0, sizeof(uint8_t) * (SEND_INFO+1));    // Used as flag, will be different from 0 only after the grid is ready to be convoluted
   pthread_mutex_init(&(setup.mutex), NULL);                   // Used by io_thread and main thread to synchronize
   pthread_cond_init(&(setup.cond), NULL);
@@ -154,7 +145,7 @@ int main(int argc, char** argv) {
     // Start grid read. Rank 0 has the whole file in memory, other ranks have only the part they are interested in
     num_pads = (kern_width - 1) / 2;
     old_grid = malloc((grid_width + num_pads*2) * grid_width * sizeof(float));
-    if ((rc = pthread_create(&threads[num_threads/2], NULL, init_vars, NULL))) { 
+    if ((rc = pthread_create(&threads[num_threads/2], NULL, setup_thread, NULL))) { 
       fprintf(stderr, "Error while creating the setup thread; Return code: %d\n", rc);
       exit(-1);
     }
@@ -203,7 +194,7 @@ int main(int argc, char** argv) {
     kern_elems = kern_width * kern_width;
     kernel = malloc(sizeof(float) * kern_elems);
     MPI_Irecv(kernel, kern_elems, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &(setup.requests[0]));    
-    init_vars(NULL);
+    setup_thread(NULL);
   }
 
   pthread_mutex_lock(&(setup.mutex));
@@ -213,7 +204,7 @@ int main(int argc, char** argv) {
 
   // If mpi is needed, main thread is placed around the center of the matrix and works with load_balancer rows
   if(num_procs > 1) 
-    main_thread((void*) &setup.handlers[num_threads/2]);
+    coordinator_thread((void*) &setup.handlers[num_threads/2]);
   else 
     worker_thread((void*) &setup.handlers[num_threads/2]);
 
@@ -236,7 +227,7 @@ int main(int argc, char** argv) {
   }
 
   if(rank) {
-    MPI_Send(&res_grid[pad_elems], proc_num_rows*grid_width, MPI_FLOAT, 0, rank, MPI_COMM_WORLD);
+    MPI_Send(&res_grid[pad_elems], proc_nrows*grid_width, MPI_FLOAT, 0, rank, MPI_COMM_WORLD);
   } else if(num_procs > 1) {
     MPI_Status statuses[num_procs-1];
     MPI_Waitall(num_procs-1, res_gather_reqs, statuses);
@@ -272,10 +263,10 @@ int main(int argc, char** argv) {
   }
 
   // Destroy pthread objects and free all used resources
-  pthread_mutex_destroy(&mutex_lb);
+  pthread_mutex_destroy(&lb.mutex);
   pthread_mutex_destroy(&setup.mutex);
   pthread_cond_destroy(&setup.cond);
-  pthread_cond_destroy(&lb_iter_completed);
+  pthread_cond_destroy(&lb.iter_completed);
   for(int i = 0; i < num_threads; i++) {
     pthread_mutex_destroy(&setup.handlers[i].mutex);
     pthread_cond_destroy(&setup.handlers[i].pad_ready);
@@ -296,7 +287,7 @@ int main(int argc, char** argv) {
  * threads and setup their handler connections. Ranks different from 0 make also some MPI calls to start data
  * receiving. Some synchronization is needed if read from disk end earlier.
 */
-void* init_vars(void* args) {
+void* setup_thread(void* args) {
   grid_elems = grid_width * grid_width;
   num_pads = (kern_width - 1) / 2;
   pad_elems = grid_width * num_pads;
@@ -304,20 +295,20 @@ void* init_vars(void* args) {
   // Rank 0 get info about which processes must compute an additional row, other ranks get info only about themself
   get_process_additional_row(setup.procs_info); 
   const uint min_nrows = (grid_width / num_procs);                            // Minimum amout of rows distributed to each process
-  proc_num_rows = min_nrows + setup.procs_info[0].has_additional_row;         // Number of rows assigned to current process
-  const uint proc_num_rows_size = proc_num_rows * grid_width;                 // Number of elements assigned to a process
+  proc_nrows = min_nrows + setup.procs_info[0].has_additional_row;         // Number of rows assigned to current process
+  const uint proc_nrows_size = proc_nrows * grid_width;                 // Number of elements assigned to a process
 
   if(!rank) {
     new_grid = malloc((grid_elems + pad_elems*2) * sizeof(float));
   } else {
-    new_grid = malloc((proc_num_rows_size + pad_elems*2) * sizeof(float));
-    old_grid = malloc((proc_num_rows_size + pad_elems*2) * sizeof(float));    // Ranks different from 0 has a smaller grid to alloc
+    new_grid = malloc((proc_nrows_size + pad_elems*2) * sizeof(float));
+    old_grid = malloc((proc_nrows_size + pad_elems*2) * sizeof(float));    // Ranks different from 0 has a smaller grid to alloc
   }
 
   // Rank 0 prepares send/recv info (synch point with io_thread), other ranks receives grid data. 
   if(!rank){
     setup.procs_info[0].start = 0;
-    setup.procs_info[0].size = (proc_num_rows + num_pads*2) * grid_width;
+    setup.procs_info[0].size = (proc_nrows + num_pads*2) * grid_width;
     if(num_procs > 1) {
       // Info about data scattering. Pads are included (to avoid an MPI exchange in the first iteration)
       int offset = setup.procs_info[0].has_additional_row;
@@ -334,7 +325,7 @@ void* init_vars(void* args) {
     pthread_mutex_unlock(&(setup.mutex));
   } else {
     // Receive grid data
-    int recv_size = (proc_num_rows + num_pads * 2) * grid_width;
+    int recv_size = (proc_nrows + num_pads * 2) * grid_width;
     if(rank == num_procs-1) recv_size -= grid_width;
     MPI_Irecv(old_grid, recv_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &(setup.requests[1]));
   }
@@ -345,8 +336,8 @@ void* init_vars(void* args) {
     memset(old_grid, 0, pad_elems * sizeof(float));
   }
   if(rank == num_procs-1) {
-    memset(&new_grid[proc_num_rows_size + pad_elems], 0, pad_elems * sizeof(float));
-    memset(&old_grid[proc_num_rows_size + pad_elems], 0, pad_elems * sizeof(float));
+    memset(&new_grid[proc_nrows_size + pad_elems], 0, pad_elems * sizeof(float));
+    memset(&old_grid[proc_nrows_size + pad_elems], 0, pad_elems * sizeof(float));
   }
 
   // PThreads arguments initialization 
@@ -360,18 +351,18 @@ void* init_vars(void* args) {
   }
 
   // Managing lb handler and mt handler connections
-  load_balancer->tid = -1;
-  load_balancer->top = &handlers[num_threads/2-1];          // top neighbour is always the same
-  handlers[num_threads/2-1].bottom = load_balancer;
+  lb.handler->tid = -1;
+  lb.handler->top = &handlers[num_threads/2-1];          // top neighbour is always the same
+  handlers[num_threads/2-1].bottom = lb.handler;
   struct thread_handler* mth = &handlers[num_threads/2];    // main thread handler (tid == num_threads/2)
 
   if(num_procs == 1) {
-    load_balancer->bottom = &handlers[num_threads/2];
-    handlers[num_threads/2].top = load_balancer;
+    lb.handler->bottom = &handlers[num_threads/2];
+    handlers[num_threads/2].top = lb.handler;
   } else {                                                 // bottom neighbour is different if num_procs > 1 
     if(num_threads > 2) {
-      load_balancer->bottom = &handlers[num_threads/2+1];
-      handlers[num_threads/2+1].top = load_balancer;
+      lb.handler->bottom = &handlers[num_threads/2+1];
+      handlers[num_threads/2+1].top = lb.handler;
     }
 
     if(!rank){
@@ -386,13 +377,13 @@ void* init_vars(void* args) {
       handlers[num_threads-1].bottom = NULL;
       mth->top = NULL;
       if(num_threads == 2) {
-        load_balancer->bottom = NULL;
+        lb.handler->bottom = NULL;
         mth->bottom = &handlers[0];
       }
     } else {
       if(num_threads == 2){
-        load_balancer->bottom = mth;
-        mth->top = load_balancer;
+        lb.handler->bottom = mth;
+        mth->top = lb.handler;
       } else {
         handlers[num_threads-1].bottom = mth;
         mth->top = &handlers[num_threads-1];
@@ -419,14 +410,12 @@ void* init_vars(void* args) {
   } 
   const uint8_t mpi_not_needed = (num_procs > 1) & (rank == num_procs-1) & (num_threads == 2); */
 
-  pthread_mutex_init(&mutex_lb, NULL);
-  pthread_cond_init(&lb_iter_completed, NULL);
-  pthread_mutex_init(&(load_balancer->mutex), NULL);
-  pthread_cond_init(&(load_balancer->pad_ready), NULL);
-  initialize_thread_coordinates(load_balancer);
-  lb_curr_start = load_balancer->start + pad_elems;                 // Start from submatrix with no dependencies
-  lb_iter = 0; lb_rows_completed = 0;
-  lb_top_pad = 0; lb_bot_pad = 0;
+  pthread_mutex_init(&lb.mutex, NULL);
+  pthread_cond_init(&lb.iter_completed, NULL);
+  pthread_mutex_init(&(lb.handler->mutex), NULL);
+  pthread_cond_init(&(lb.handler->pad_ready), NULL);
+  initialize_thread_coordinates(lb.handler);
+  lb.curr_start = lb.handler->start + pad_elems;                 // Start from submatrix with no dependencies
   thread_measures = malloc(sizeof(long_long*) * num_threads);
 
   // Computation of "last_mask"
@@ -461,7 +450,7 @@ void* init_vars(void* args) {
  * Differs from worker_thread procedure because it deals MPI dependencies and works only in the load_balancing area (because 
  * of the unpredictable amount of work associated with MPI)
 */
-void* main_thread(void* args) {
+void* coordinator_thread(void* args) {
   struct thread_handler *handler = (struct thread_handler*)args;
   float *my_old_grid = old_grid;
   float *my_new_grid = new_grid;
@@ -470,7 +459,7 @@ void* main_thread(void* args) {
   uint8_t changes = 0;                              // If no changes have been made (or cannot be made), main thread will wait
   struct local_data local = {0};
   struct node_data node = {0};
-  const int bottom_pad_start = proc_num_rows * grid_width;
+  const int bottom_pad_start = proc_nrows * grid_width;
 
   // PAPI setup
   int rc, event_set = PAPI_NULL;
@@ -565,7 +554,7 @@ void* main_thread(void* args) {
   pthread_mutex_unlock(&(handler->mutex));
 
   // Complete the first convolution iteration by computing central elements
-  if(!lb_iter) load_balancing(0, 0, measures);
+  if(!lb.iter) load_balancing(0, 0, measures);
 
   // Second or higher convolution iterations
   int cnt_work;
@@ -594,11 +583,11 @@ void* main_thread(void* args) {
 
       if(!completed[CENTER]) {
         //temporary solution
-        if(iter >= lb_iter) {
+        if(iter >= lb.iter) {
           changes = 1;
           load_balancing(iter, 1, measures);
           cnt_work++;
-          if(cnt_work > lb_num_rows/2) completed[CENTER] = 1;
+          if(cnt_work > lb.nrows/2) completed[CENTER] = 1;
         }
         else completed[CENTER] = 1;
       }
@@ -607,7 +596,7 @@ void* main_thread(void* args) {
     }
 
     // Load balancing if this thread ended current iteration earlier
-    if(iter >= lb_iter) load_balancing(iter, 0, measures);
+    if(iter >= lb.iter) load_balancing(iter, 0, measures);
   }
 
   // Retrieving execution info
@@ -695,7 +684,7 @@ void* worker_thread(void* args) {
 
   // Complete the first convolution iteration by computing central elements
   conv_subgrid(my_old_grid, my_new_grid, (handler->start + pad_elems), (handler->end - pad_elems));
-  if(!lb_iter) load_balancing(0, 0, measures);
+  if(!lb.iter) load_balancing(0, 0, measures);
 
   // Second or higher convolution iterations
   int* completed = local.completed;
@@ -734,7 +723,7 @@ void* worker_thread(void* args) {
     }
 
     // Load balancing if this thread ended current iteration earlier
-    if(iter >= lb_iter) load_balancing(iter, 0, measures);
+    if(iter >= lb.iter) load_balancing(iter, 0, measures);
   }
 
   // Retrieving execution info
@@ -772,59 +761,59 @@ void load_balancing(int iter, uint8_t single_work, long_long** meas){
   }
 
   // Compute a row of the load_balancer shared work 
-  while(iter >= lb_iter) {
+  while(iter >= lb.iter) {
     start = 0;
     t = PAPI_get_real_usec();
-    pthread_mutex_lock(&mutex_lb);
+    pthread_mutex_lock(&lb.mutex);
     *lb_mutex_wait_time += PAPI_get_real_usec() - t;
-    while(iter > lb_iter)
-      pthread_cond_wait(&lb_iter_completed, &mutex_lb);         // Wait if lb work of previous iteration is not completed yet
-    if(iter == lb_iter) {
-      start = lb_curr_start;
-      lb_curr_start += grid_width;                              // From lb->start to lb->end
+    while(iter > lb.iter)
+      pthread_cond_wait(&lb.iter_completed, &lb.mutex);         // Wait if lb work of previous iteration is not completed yet
+    if(iter == lb.iter) {
+      start = lb.curr_start;
+      lb.curr_start += grid_width;                              // From lb->start to lb->end
     }
-    pthread_mutex_unlock(&mutex_lb);
+    pthread_mutex_unlock(&lb.mutex);
     end = start + grid_width;
-    if(!start || end > load_balancer->end + pad_elems) return;  // All shared works have been reserved, return to private work
+    if(!start || end > lb.handler->end + pad_elems) return;  // All shared works have been reserved, return to private work
 
     // If my shared work is in the middle, no dependencies
-    if(start >= (load_balancer->start + pad_elems) && end <= (load_balancer->end - pad_elems)) {
+    if(start >= (lb.handler->start + pad_elems) && end <= (lb.handler->end - pad_elems)) {
       conv_subgrid(my_old_grid, my_new_grid, start, end);
       t = PAPI_get_real_usec();
-      pthread_mutex_lock(&mutex_lb);
+      pthread_mutex_lock(&lb.mutex);
       *lb_mutex_wait_time += PAPI_get_real_usec() - t;
-      lb_rows_completed++;                                      // Track the already computed row
-      if(lb_rows_completed == lb_num_rows) {                    // All shared works have been completed
-        lb_rows_completed = 0;
-        lb_curr_start = load_balancer->start + pad_elems;
-        lb_iter++;
-        pthread_cond_broadcast(&lb_iter_completed);
+      lb.rows_completed++;                                   // Track the already computed row
+      if(lb.rows_completed == lb.nrows) {                    // All shared works have been completed
+        lb.rows_completed = 0;
+        lb.curr_start = lb.handler->start + pad_elems;
+        lb.iter++;
+        pthread_cond_broadcast(&lb.iter_completed);
       }
-      pthread_mutex_unlock(&mutex_lb);
+      pthread_mutex_unlock(&lb.mutex);
       if(single_work) return;
       continue;
     }
 
     // If only the top matrix portion is left
-    if(end > load_balancer->end) {
-      start -= lb_size;
-      end -= lb_size;
+    if(end > lb.handler->end) {
+      start -= lb.size;
+      end -= lb.size;
     }
 
     // Dependencies handling
     struct thread_handler* neigh_handler = NULL;
     uint8_t *rows_to_wait, *rows_to_assert;
     uint* pad_counter;
-    if(end <= load_balancer->start + pad_elems) {           // Top pad
-      neigh_handler = load_balancer->top;
-      rows_to_wait = load_balancer->top->bot_rows_done;
-      rows_to_assert = load_balancer->top_rows_done;
-      pad_counter = &lb_top_pad;
-    } else if(load_balancer->bottom != NULL){               // Bottom pad
-      neigh_handler = load_balancer->bottom;
-      rows_to_wait = load_balancer->bottom->top_rows_done;
-      rows_to_assert = load_balancer->bot_rows_done;
-      pad_counter = &lb_bot_pad;
+    if(end <= lb.handler->start + pad_elems) {           // Top pad
+      neigh_handler = lb.handler->top;
+      rows_to_wait = lb.handler->top->bot_rows_done;
+      rows_to_assert = lb.handler->top_rows_done;
+      pad_counter = &lb.top_pad;
+    } else if(lb.handler->bottom != NULL){               // Bottom pad
+      neigh_handler = lb.handler->bottom;
+      rows_to_wait = lb.handler->bottom->top_rows_done;
+      rows_to_assert = lb.handler->bot_rows_done;
+      pad_counter = &lb.bot_pad;
     }
 
     // Wait if neighbours are late
@@ -841,30 +830,30 @@ void load_balancing(int iter, uint8_t single_work, long_long** meas){
     // Track pad completion and signal neighbour thread
     if(iter+1 < num_iterations && neigh_handler != NULL) {
       t = PAPI_get_real_usec();
-      pthread_mutex_lock(&(load_balancer->mutex));
+      pthread_mutex_lock(&(lb.handler->mutex));
       *handlers_mutex_wait_time += PAPI_get_real_usec() - t;
       (*pad_counter)++;
       if(*pad_counter == num_pads) {
         rows_to_wait[prev_odd] = 0;
         rows_to_assert[!prev_odd] = 1;
         *pad_counter = 0;
-        pthread_cond_broadcast(&(load_balancer->pad_ready));
+        pthread_cond_broadcast(&(lb.handler->pad_ready));
       }
-      pthread_mutex_unlock(&(load_balancer->mutex));
+      pthread_mutex_unlock(&(lb.handler->mutex));
     }
 
     // Track row completion
     t = PAPI_get_real_usec();
-    pthread_mutex_lock(&mutex_lb);
+    pthread_mutex_lock(&lb.mutex);
     *lb_mutex_wait_time += PAPI_get_real_usec() - t;
-    lb_rows_completed++;                                      // Track the already computed row
-    if(lb_rows_completed == lb_num_rows) {                    // All shared works have been completed
-      lb_rows_completed = 0;
-      lb_curr_start = load_balancer->start + pad_elems;
-      lb_iter++;
-      pthread_cond_broadcast(&lb_iter_completed);
+    lb.rows_completed++;                                      // Track the already computed row
+    if(lb.rows_completed == lb.nrows) {                       // All shared works have been completed
+      lb.rows_completed = 0;
+      lb.curr_start = lb.handler->start + pad_elems;
+      lb.iter++;
+      pthread_cond_broadcast(&lb.iter_completed);
     }
-    pthread_mutex_unlock(&mutex_lb);
+    pthread_mutex_unlock(&lb.mutex);
     if(single_work) return;
   }
 }
@@ -1185,54 +1174,55 @@ void get_process_additional_row(struct proc_info* procs_info) {
 */
 void initialize_thread_coordinates(struct thread_handler* handler) {
   int submatrix_id;
-  int rows_per_thread;
+  int nrows_per_thread;
   const int num_workers = num_threads - (num_procs > 1 ? 1 : 0);
 
   if(handler->tid != -1) {
     submatrix_id = handler->tid;
     if(num_procs == 1 && handler->tid >= num_threads/2) submatrix_id++;
-    rows_per_thread = proc_static_work_rows / num_workers;
+    nrows_per_thread = static_work_nrows / num_workers;
   } else {
     // Load balancer (tid == -1) it's placed in the center of the process matrix
     submatrix_id = num_threads/2;
-    lb_num_rows = num_threads;
-    if (lb_num_rows < num_pads * 2) lb_num_rows += (num_pads * 2);
+    lb.nrows = num_threads;
+    if (lb.nrows < num_pads * 2) lb.nrows += (num_pads * 2);
 
     // Compute the amount of rows assigned to load balancer (including remainder rows and main thread)
-    int rem_rows = (proc_num_rows - lb_num_rows) % num_threads;
-    rows_per_thread = (proc_num_rows - lb_num_rows) / num_threads;
-    lb_num_rows += rem_rows;
+    int rem_rows = (proc_nrows - lb.nrows) % num_threads;
+    nrows_per_thread = (proc_nrows - lb.nrows) / num_threads;
+    lb.nrows += rem_rows;
     if(num_procs > 1) {
-      int main_thread_rows = rows_per_thread - num_pads*2 - MAIN_THREAD_OFFLOAD;
-      lb_num_rows += main_thread_rows;
+      const uint offload = (num_pads*2 > num_threads) ? num_pads*2 : num_threads;
+      coordinator_nrows = nrows_per_thread - offload;
+      lb.nrows += coordinator_nrows;
     }
 
     // Worker threads will not work (initially) at load balancer rows. Also, only main thread computes mpi pads
-    proc_static_work_rows = proc_num_rows - lb_num_rows;
+    static_work_nrows = proc_nrows - lb.nrows;
     if(num_procs > 1) { 
-      proc_static_work_rows -= num_pads;
-      if(rank > 0 && rank < num_procs-1) proc_static_work_rows -= num_pads;
+      static_work_nrows -= num_pads;
+      if(rank > 0 && rank < num_procs-1) static_work_nrows -= num_pads;
     }
-    rows_per_thread = proc_static_work_rows / num_workers;
-    rem_rows = proc_static_work_rows % num_workers;
-    
-    proc_static_work_rows -= rem_rows;
-    lb_num_rows += rem_rows;
-    lb_size = lb_num_rows * grid_width;
+    nrows_per_thread = static_work_nrows / num_workers;
+    rem_rows = static_work_nrows % num_workers;
+
+    static_work_nrows -= rem_rows;
+    lb.nrows += rem_rows;
+    lb.size = lb.nrows * grid_width;
   }
 
   // Initialize coordinates
-  const int fixed_size = rows_per_thread * grid_width;
+  const int fixed_size = nrows_per_thread * grid_width;
   handler->start = pad_elems + submatrix_id * fixed_size;
   int actual_size; 
   if (handler->tid == -1) {
-    actual_size = lb_size;
+    actual_size = lb.size;
   } else {
     actual_size = fixed_size;
     if(submatrix_id > num_threads/2) 
-      handler->start = handler->start - fixed_size + lb_size;
+      handler->start = handler->start - fixed_size + lb.size;
   }
 
   if(rank) handler->start += pad_elems;
-  handler->end = handler->start + actual_size; 
+  handler->end = handler->start + actual_size;
 }

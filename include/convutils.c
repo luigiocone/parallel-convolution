@@ -8,9 +8,9 @@
 #include <unistd.h>
 #include "convutils.h"
 
+#define EXP_CHARS 13
 #define DEBUG_TXT_PATH "./io-files/result.txt"
-
-extern uint grid_elems, pad_elems, grid_width, num_threads;
+#define DEBUG_BIN_PATH "./io-files/result.bin"
 
 /* Set thread affinity. If there are more threads than cores, no affinity will be set */
 int stick_this_thread_to_core(int core_id) {
@@ -56,16 +56,67 @@ int floats_to_echars(float *float_buffer, char* char_buffer, int count, int row_
   return stored;
 }
 
-/* Save a float array to a text file */
+/* Save a float array to file in textual mode */
 void save_txt(float* res_grid){
   FILE* fp_result_txt;
   if((fp_result_txt = fopen(DEBUG_TXT_PATH, "w")) == NULL) {
-    fprintf(stderr, "Error while opening result debug file\n");
+    fprintf(stderr, "Error while opening txt result debug file\n");
+    return;
+  }
+
+  char* char_buffer = malloc(sizeof(char) * (grid_elems*2) * (EXP_CHARS + 1));
+  uint count = floats_to_echars(&res_grid[pad_elems], char_buffer, grid_elems, grid_width);
+  
+  uint char_written = 0;
+  do char_written += fwrite(char_buffer, sizeof(char), count, fp_result_txt);
+  while(char_written < count && !ferror(fp_result_txt));
+  
+  free(char_buffer);
+  if(char_written < count) {
+    fprintf(stderr, "Number of chars written: %d | Expected amount: %d\n", char_written, count);
+    exit(-1);
+  } else if(ferror(fp_result_txt)) {
+    perror("Error while writing txt result: ");
     exit(-1);
   }
-  char* temp_buffer = malloc(sizeof(char) * (grid_elems*2) * (13 + 1));
-  int count = floats_to_echars(&res_grid[pad_elems], temp_buffer, grid_elems, grid_width);
-  fwrite(temp_buffer, count, sizeof(char), fp_result_txt);
-  free(temp_buffer);
   fclose(fp_result_txt);
+}
+
+/* Save a float array to file in binary mode */
+void save_bin(float* res_grid){
+  FILE* fp_result_bin;
+  if ((fp_result_bin = fopen(DEBUG_BIN_PATH, "wb")) == NULL) {
+    fprintf(stderr, "Error while opening bin result debug file\n");
+    return;
+  }
+  
+  
+  uint float_written = 0;
+  do float_written += fwrite(&res_grid[pad_elems], sizeof(float), grid_elems, fp_result_bin);
+  while(float_written < grid_elems && !ferror(fp_result_bin)); 
+  
+  if(float_written < grid_elems) {
+    fprintf(stderr, "Number of float elements written: %d | Expected amount: %d\n", float_written, grid_elems);
+    exit(-1);
+  } else if(ferror(fp_result_bin)) {
+    perror("Error while writing bin result: ");
+    exit(-1);
+  }
+  fclose(fp_result_bin);
+}
+
+// Read in binary mode "count" floating point values from "fp" into "buffer" 
+void read_float_matrix(FILE* fp, float* buffer, int count) {
+  uint float_read = 0;
+  
+  do float_read += fread(buffer, sizeof(float), count, fp);
+  while(!(feof(fp) | ferror(fp)) && float_read < count);
+
+  if(float_read < count) {
+    fprintf(stderr, "Error in file reading: number of float elements read (%d) is lower than the expected amount (%d)\n", float_read, count);
+    exit(-1);
+  } else if (ferror(fp)) {
+    perror("Error while reading from file:");
+    exit(-1);
+  }
 }

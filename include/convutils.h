@@ -2,6 +2,9 @@
 #define CONVUTILS_H
 #define SIM_REQS 6                    // Per-process max number of simultaneous MPI requests
 
+extern uint grid_elems, pad_elems, grid_width; 
+extern int num_threads;
+
 enum POSITIONS {                      // Submatrix positions of interests for dependencies handling
     TOP = 0,
     BOTTOM = 1,
@@ -72,7 +75,9 @@ struct load_balancer {                // Used by worker threads to do some addit
 
 int stick_this_thread_to_core(int);             // Thread affinity
 void handle_PAPI_error(int, char*);             // Print a consistent error message if it occurred
+void read_float_matrix(FILE*, float*, int);     // Read (in binary mode) a matrix of floating point values from file 
 int floats_to_echars(float*, char*, int, int);  // Convert float matrix to chars using format "%+e"
-void save_txt(float*);                          // Save the computed matrix in textual mode (used for debug)
+void save_txt(float*);                          // Save the computed matrix in textual mode (for debug)
+void save_bin(float*);                          // Save the computed matrix in binary mode (for debug)
 
 #endif

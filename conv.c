@@ -595,6 +595,7 @@ void* worker_thread(void* args) {
   float *my_new_grid = new_grid;
   float *tmp;                                       // Used only for grid swap
   int center_start;                                 // Center elements are completed one row at a time
+  uint8_t changes;                                  // To track if something changed during polling
   struct local_data local = {0};
 
   // PAPI setup
@@ -672,12 +673,15 @@ void* worker_thread(void* args) {
     memset(completed, 0, sizeof(int) * (CENTER+1));
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
+      changes = 0;
       if(!completed[TOP]) {
         thread_polling(TOP, iter, &local, measures);
+        changes |= completed[TOP];
       }
 
       if(!completed[BOTTOM]) {
         thread_polling(BOTTOM, iter, &local, measures);
+        changes |= completed[BOTTOM];
       }
 
       // Computing central rows one at a time if top and bottom rows are incomplete
@@ -695,7 +699,10 @@ void* worker_thread(void* args) {
         conv_subgrid(my_old_grid, my_new_grid, center_start, center_end);
         if(center_end == actual_end) completed[CENTER] = 1;
         else center_start += rbf_elems;
+        changes = 1;
       }
+
+      if(!changes) load_balancing(iter, 1, measures);
     }
 
     // Load balancing if this thread ended current iteration earlier
@@ -914,16 +921,31 @@ void thread_polling(uint8_t pos, uint iter, struct local_data* ld, long_long** m
     } else {
       long_long *handler_mutex_wait_time = meas[1];
       
+      // Make a first single check without waiting
       tmp = PAPI_get_real_usec();
       pthread_mutex_lock(&(ld->neigh[pos]->mutex));
       *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
-      tmp = PAPI_get_real_usec();
-      while(!(*rtw))
-        pthread_cond_wait(&(ld->neigh[pos]->pad_ready), &(ld->neigh[pos]->mutex));
-      *condition_wait_time += PAPI_get_real_usec() - tmp;
-      *rtw = 0;
+      if(*rtw) {
+        *rtw = 0;
+        ld->completed[pos] = 1;
+      }
       pthread_mutex_unlock(&(ld->neigh[pos]->mutex));
-      ld->completed[pos] = 1;
+
+      // If neighbour part still not ready, make a single work of load balancing set of rows and wait
+      if(!ld->completed[pos]) {
+        load_balancing(iter, 1, meas);
+
+        tmp = PAPI_get_real_usec();
+        pthread_mutex_lock(&(ld->neigh[pos]->mutex));
+        *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
+        tmp = PAPI_get_real_usec();
+        while(!(*rtw))
+          pthread_cond_wait(&(ld->neigh[pos]->pad_ready), &(ld->neigh[pos]->mutex));
+        *condition_wait_time += PAPI_get_real_usec() - tmp;
+        *rtw = 0;
+        pthread_mutex_unlock(&(ld->neigh[pos]->mutex));
+        ld->completed[pos] = 1;
+      }
     }
   }
   

@@ -19,8 +19,8 @@
 #define KERNEL_FILE_PATH "./io-files/kernels/gblur.bin"
 #define VEC_SIZE 4
 #define MEAN_VALUE 0
-#define ROWS_BEFORE_POLLING 2         // How many rows must be computed before polling the neighbours
-#define COORDINATOR_WORK_FACTOR 4     // Used to calc many rows must be computed before checking MPI dependencies
+#define WORKER_FACTOR 1               // Used to calc how many rows must be computed from worker before polling the neighbours
+#define COORDINATOR_FACTOR 3          // Used to calc how many rows must be computed from coordinator before checking MPI dependencies
 #define DEBUG 1                       // True to save result in textual and binary mode
 
 void *coordinator_thread(void*);
@@ -32,7 +32,6 @@ void wait_protocol(uint, struct local_data*, struct node_data*, long_long**);
 void load_balancing(int, uint8_t, long_long**);
 void load_balancing_custom(int, uint*, uint8_t, long_long**);
 void conv_subgrid(float*, float*, int, int);
-void read_kernel(FILE*);
 void get_process_additional_row(struct proc_info*);
 void initialize_thread_coordinates(struct thread_handler*);
 
@@ -45,6 +44,7 @@ uint32_t kern_width;                  // Number of elements in one kernel matrix
 uint32_t grid_width;                  // Number of elements in one grid matrix row
 uint pad_nrows;                       // Number of rows that should be shared with other processes
 uint pad_elems;                       // Number of elements in the pad section of the grid matrix
+uint rbf_elems;                       // Rows before polling float elements, how many rows must be computed from worker before polling the neighbours
 uint kern_elems;                      // Number of elements in whole kernel matrix
 uint grid_elems;                      // Number of elements in whole grid matrix
 uint proc_nrows;                      // Number of rows assigned to a process
@@ -162,24 +162,16 @@ int main(int argc, char** argv) {
     pthread_mutex_lock(&(setup.mutex));
     setup.flags[GRID] = 1;
     pthread_cond_broadcast(&(setup.cond));
-    while(!setup.flags[SEND_INFO])
-      pthread_cond_wait(&(setup.cond), &(setup.mutex));
+    if(num_procs > 1) {
+      while(!setup.flags[SEND_INFO]) pthread_cond_wait(&(setup.cond), &(setup.mutex));
+    }
     pthread_mutex_unlock(&(setup.mutex));
 
     // Grid distribution
     if(num_procs > 1) {
       MPI_Request grid_scatter_reqs[num_procs-1];
       for(int p = 1; p < num_procs; p++) {
-        MPI_Isend(&old_grid[setup.procs_info[p].start], setup.procs_info[p].size, MPI_FLOAT, p, p, MPI_COMM_WORLD, &grid_scatter_reqs[p-1]);
-      }
-    }
-
-    // Info about result gathering from previous scattering data. Pads are excluded
-    if(num_procs > 1) {
-      for(int p = 1; p < num_procs; p++) {
-        setup.procs_info[p].start += pad_nrows * grid_width;            // Starting position final recv
-        setup.procs_info[p].size -= pad_nrows * 2 * grid_width;         // Payload size for final recv
-        if(p == num_procs-1) setup.procs_info[p].size += grid_width * pad_nrows;
+        MPI_Isend(&old_grid[setup.procs_info[p].sstart], setup.procs_info[p].ssize, MPI_FLOAT, p, p, MPI_COMM_WORLD, &grid_scatter_reqs[p-1]);
       }
     }
 
@@ -211,17 +203,18 @@ int main(int argc, char** argv) {
     worker_thread((void*) &setup.handlers[num_threads/2]);
 
   // Check if 'setup_thread' has exited and start recv listeners to gather results
+  if(!rank && pthread_join(threads[num_threads/2], (void*) &rc)) {
+    fprintf(stderr, "Join error, setup thread exited with: %d", rc);
+  }
+
   MPI_Request res_gather_reqs[num_procs-1];
   float *res_grid = (num_iterations % 2) ? new_grid : old_grid;
   if(!rank && num_procs > 1) {
     for(int p = 1; p < num_procs; p++)
-      MPI_Irecv(&res_grid[procs_info[p].start], procs_info[p].size, MPI_FLOAT, p, p, MPI_COMM_WORLD, &res_gather_reqs[p-1]);
+      MPI_Irecv(&res_grid[procs_info[p].gstart], procs_info[p].gsize, MPI_FLOAT, p, p, MPI_COMM_WORLD, &res_gather_reqs[p-1]);
   }
 
   // Wait workers termination and collect thread return values
-  if(!rank && pthread_join(threads[num_threads/2], (void*) &rc)) {
-    fprintf(stderr, "Join error, setup thread exited with: %d", rc);
-  }
   for(int i = 0; i < num_threads; i++) {
     if(i == num_threads/2) continue;
     if(pthread_join(threads[i], (void*) &rc)) 
@@ -280,6 +273,9 @@ int main(int argc, char** argv) {
  * receiving. Some synchronization is needed if read from disk end earlier.
 */
 void* setup_thread(void* args) {
+  const uint rbf = pad_nrows + WORKER_FACTOR;       // Rows before polling. How many rows must be computed before polling the neighbours
+  rbf_elems = rbf * grid_width;                     // Rows before polling number of float elements
+
   // Rank 0 get info about which processes must compute an additional row, other ranks get info only about themself
   get_process_additional_row(setup.procs_info); 
   const uint min_nrows = (grid_width / num_procs);                            // Minimum amout of rows distributed to each process
@@ -293,24 +289,31 @@ void* setup_thread(void* args) {
     old_grid = malloc((proc_nrows_size + pad_elems*2) * sizeof(float));    // Ranks different from 0 has a smaller grid to alloc
   }
 
-  // Rank 0 prepares send/recv info (synch point with io_thread), other ranks receives grid data. 
+  // Rank 0 prepares send/recv info (synch point with main thread), other ranks receives grid data. 
   if(!rank){
-    setup.procs_info[0].start = 0;
-    setup.procs_info[0].size = (proc_nrows + pad_nrows*2) * grid_width;
+    setup.procs_info[0].sstart = 0;
+    setup.procs_info[0].ssize = (proc_nrows + pad_nrows*2) * grid_width;
     if(num_procs > 1) {
       // Info about data scattering. Pads are included (to avoid an MPI exchange in the first iteration)
       int offset = setup.procs_info[0].has_additional_row;
       for(int i = 1; i < num_procs; i++) {
-        setup.procs_info[i].start = (min_nrows * i + offset) * grid_width;                                          // Starting position for Isend
-        setup.procs_info[i].size = (min_nrows + pad_nrows*2 + setup.procs_info[i].has_additional_row) * grid_width;  // Payload size for Isend
-        if(i == num_procs-1) setup.procs_info[i].size -= grid_width * pad_nrows;
+        setup.procs_info[i].sstart = (min_nrows * i + offset) * grid_width;
+        setup.procs_info[i].ssize = (min_nrows + pad_nrows*2 + setup.procs_info[i].has_additional_row) * grid_width;
+        if(i == num_procs-1) setup.procs_info[i].ssize -= grid_width * pad_nrows;
         offset += setup.procs_info[i].has_additional_row;
       }
+      pthread_mutex_lock(&(setup.mutex));
+      setup.flags[SEND_INFO] = 1;
+      pthread_cond_signal(&(setup.cond));
+      pthread_mutex_unlock(&(setup.mutex));
+      
+      // Info about result gathering from previous scattering data. Pads are excluded
+      for(int p = 1; p < num_procs; p++) {
+        setup.procs_info[p].gstart = setup.procs_info[p].sstart + pad_nrows * grid_width;
+        setup.procs_info[p].gsize = setup.procs_info[p].ssize - pad_nrows * 2 * grid_width;
+        if(p == num_procs-1) setup.procs_info[p].gsize += grid_width * pad_nrows;
+      }
     }
-    pthread_mutex_lock(&(setup.mutex));
-    setup.flags[SEND_INFO] = 1;
-    pthread_cond_signal(&(setup.cond));
-    pthread_mutex_unlock(&(setup.mutex));
   } else {
     // Receive grid data
     int recv_size = (proc_nrows + pad_nrows * 2) * grid_width;
@@ -379,32 +382,15 @@ void* setup_thread(void* args) {
     }
   }
 
-  /*printf("[%d] Connections and dependencies\n", rank);
-  for(int i = 0; i < num_threads; i++) {
-    char tid_bot[4]; char tid_top[4];
-    char lb_bot[4]; char lb_top[4];
-    if(handlers[i].bottom) {
-      if(handlers[i].bottom->tid == -1) {tid_bot[0] = 'L'; tid_bot[1] = 'B'; tid_bot[2] = '\0';}
-      else sprintf(tid_bot, "%d", handlers[i].bottom->tid);
-    }
-    if(handlers[i].top) {
-      if(handlers[i].top->tid == -1) {tid_top[0] = 'L'; tid_top[1] = 'B'; tid_top[2] = '\0';}
-      else sprintf(tid_top, "%d", handlers[i].top->tid);
-    }
-    if(load_balancer->top) sprintf(lb_top, "%d", load_balancer->top->tid);
-    if(load_balancer->bottom) sprintf(lb_bot, "%d", load_balancer->bottom->tid);
-    
-    printf("[%d][%d] TOP: [%s] | BOTTOM: [%s] | lb->top: %s | lb->bot: %s\n", rank, handlers[i].tid, (handlers[i].top ? tid_top : "NULL"), (handlers[i].bottom ? tid_bot : "NULL"), (load_balancer->top ? lb_top : "NULL"), ( load_balancer->bottom ? lb_bot : "NULL"));
-  } 
-  const uint8_t mpi_not_needed = (num_procs > 1) & (rank == num_procs-1) & (num_threads == 2); */
-
   pthread_mutex_init(&lb.mutex, NULL);
   pthread_cond_init(&lb.iter_completed, NULL);
   pthread_mutex_init(&(lb.handler->mutex), NULL);
   pthread_cond_init(&(lb.handler->pad_ready), NULL);
   initialize_thread_coordinates(lb.handler);
-  lb.curr_start = lb.handler->start + pad_elems;                 // Start from submatrix with no dependencies
+  lb.curr_start = lb.handler->start + pad_elems;               // Start from submatrix with no dependencies
   thread_measures = malloc(sizeof(long_long*) * num_threads);
+  if(!rank && num_procs == 1) 
+    initialize_thread_coordinates(&handlers[num_threads/2]);   // Initialize main thread coordinates while he is reading
 
   // Computation of "last_mask"
   uint32_t rem = kern_width % VEC_SIZE;
@@ -448,8 +434,8 @@ void* coordinator_thread(void* args) {
   struct local_data local = {0};
   struct node_data node = {0};
   const uint bottom_pad_start = proc_nrows * grid_width;
-  const uint work_nrows = pad_nrows * COORDINATOR_WORK_FACTOR;
-  coordinator_work_elems = pad_elems * COORDINATOR_WORK_FACTOR;
+  const uint work_nrows = pad_nrows * COORDINATOR_FACTOR;
+  coordinator_work_elems = pad_elems * COORDINATOR_FACTOR;
 
   // PAPI setup
   int rc, event_set = PAPI_NULL;
@@ -574,11 +560,8 @@ void* coordinator_thread(void* args) {
           completed[CENTER] = 1;
           continue;
         }
-
         uint rows_computed = work_nrows;
         load_balancing_custom(iter, &rows_computed, (completed[TOP] && completed[BOTTOM]), measures);
-
-        // "load_balancing_custom()" writes 0 in "rows_to_compute" if coordinator completed its part
         if(!rows_computed) completed[CENTER] = 1;
         changes = 1;
       }
@@ -630,12 +613,14 @@ void* worker_thread(void* args) {
   long_long* meas_to_return = malloc(sizeof(long_long) * 6);
   long_long time_start = PAPI_get_real_usec();
 
-  // Thread setup
+  // Thread setup. Coordinates of main thread could have been initialized by setup thread
   if(affinity && stick_this_thread_to_core(handler->tid)) {
     fprintf(stderr, "Error occurred while setting thread affinity on core: %d\n", handler->tid);
     exit(-1);
   }
-  initialize_thread_coordinates(handler);
+  if(num_procs > 1 || handler->tid != num_threads/2)
+    initialize_thread_coordinates(handler);
+
   local.self = handler;
   local.neigh[TOP] = handler->top;
   local.neigh[BOTTOM] = handler->bottom;
@@ -703,13 +688,13 @@ void* worker_thread(void* args) {
           center_end = actual_end;
           completed[CENTER] = 1;
         } else {
-          center_end = center_start + grid_width * ROWS_BEFORE_POLLING;
+          center_end = center_start + rbf_elems;
           if(center_end > actual_end) center_end = actual_end;
         }
 
         conv_subgrid(my_old_grid, my_new_grid, center_start, center_end);
         if(center_end == actual_end) completed[CENTER] = 1;
-        else center_start += (grid_width * ROWS_BEFORE_POLLING);
+        else center_start += rbf_elems;
       }
     }
 
@@ -851,7 +836,8 @@ void load_balancing(int iter, uint8_t single_work, long_long** meas){
 
 /* 
  * Compute a custom number of rows of the load balancing middle rows (the ones having no dependencies). The flag 
- * "check_for_more_work" is used by coordinator if it has completed all other works dealing with neighbours 
+ * "check_for_more_work" is used by coordinator if it has completed all other works dealing with neighbours. If 
+ * the coordinator portion is completed then variable "work_nrows" will assume value 0. 
 */
 void load_balancing_custom(int iter, uint* work_nrows, uint8_t check_for_more_work, long_long** meas){
   uint start = 0, end = 0;

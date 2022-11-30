@@ -65,18 +65,15 @@ void save_txt(float* res_grid){
   }
 
   char* char_buffer = malloc(sizeof(char) * (grid_elems*2) * (EXP_CHARS + 1));
-  uint count = floats_to_echars(&res_grid[pad_elems], char_buffer, grid_elems, grid_width);
-  
-  uint char_written = 0;
-  do char_written += fwrite(char_buffer, sizeof(char), count, fp_result_txt);
-  while(char_written < count && !ferror(fp_result_txt));
-  
+  const uint count = floats_to_echars(&res_grid[pad_elems], char_buffer, grid_elems, grid_width);
+  const uint char_written = fwrite(char_buffer, sizeof(char), count, fp_result_txt);
   free(char_buffer);
+  if(ferror(fp_result_txt)) {
+    perror("Error while writing txt result: ");
+    exit(-1);
+  }
   if(char_written < count) {
     fprintf(stderr, "Number of chars written: %d | Expected amount: %d\n", char_written, count);
-    exit(-1);
-  } else if(ferror(fp_result_txt)) {
-    perror("Error while writing txt result: ");
     exit(-1);
   }
   fclose(fp_result_txt);
@@ -90,16 +87,13 @@ void save_bin(float* res_grid){
     return;
   }
   
-  
-  uint float_written = 0;
-  do float_written += fwrite(&res_grid[pad_elems], sizeof(float), grid_elems, fp_result_bin);
-  while(float_written < grid_elems && !ferror(fp_result_bin)); 
-  
+  const uint float_written = fwrite(&res_grid[pad_elems], sizeof(float), grid_elems, fp_result_bin);
+  if(ferror(fp_result_bin)) {
+    perror("Error while writing bin result: ");
+    exit(-1);
+  }
   if(float_written < grid_elems) {
     fprintf(stderr, "Number of float elements written: %d | Expected amount: %d\n", float_written, grid_elems);
-    exit(-1);
-  } else if(ferror(fp_result_bin)) {
-    perror("Error while writing bin result: ");
     exit(-1);
   }
   fclose(fp_result_bin);
@@ -107,16 +101,15 @@ void save_bin(float* res_grid){
 
 // Read in binary mode "count" floating point values from "fp" into "buffer" 
 void read_float_matrix(FILE* fp, float* buffer, int count) {
-  uint float_read = 0;
-  
-  do float_read += fread(buffer, sizeof(float), count, fp);
-  while(!(feof(fp) | ferror(fp)) && float_read < count);
+  const uint float_read = fread(buffer, sizeof(float), count, fp);
 
-  if(float_read < count) {
-    fprintf(stderr, "Error in file reading: number of float elements read (%d) is lower than the expected amount (%d)\n", float_read, count);
-    exit(-1);
-  } else if (ferror(fp)) {
+  if(ferror(fp)) {
     perror("Error while reading from file:");
+    exit(-1);
+  }
+  if(float_read < count) {
+    fprintf(stderr, "Error in file reading: number of float elements read (%d) is lower than the expected amount (%d)\nEOF %sreached\n", 
+      float_read, count, (feof(fp) ? "" : "not "));
     exit(-1);
   }
 }

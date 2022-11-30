@@ -65,7 +65,8 @@ int main(int argc, char** argv) {
   int rc;                             // Return code used in error handling
   long_long time_start, time_stop;    // To measure execution time
   long_long grid_read_time;           // Measuring disk read time of grid to convolute
-  FILE *fp_grid, *fp_kernel;          // I/O files for grid and kernel matrices
+  FILE *fp_grid = NULL;               // I/O files for grid and kernel matrices
+  FILE *fp_kernel = NULL;
 
   // Fetch from arguments how many convolution iterations do and the number of threads
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
@@ -98,6 +99,9 @@ int main(int argc, char** argv) {
   time_start = PAPI_get_real_usec();
   
   struct proc_info procs_info[(rank) ? 1 : num_procs];
+  MPI_Request info_reqs[num_procs-1];                         // Used by rank 0 to ditribute initial informations (matrices size)
+  MPI_Request kern_reqs[num_procs-1];                         // Used by rank 0 to ditribute kernel matrix
+  MPI_Request grid_reqs[num_procs-1];                         // Used by rank 0 to ditribute grid matrix
   pthread_t threads[num_threads];                             // Worker threads except the middle one (num_threads/2) used as setup thread while main is reading from disk
   lb = (struct load_balancer){0};                             // Load balancer is not an active thread. This structure is used by all workers
   lb.handler = &(struct thread_handler){0};                   // Used to synchronize with neighbour threads
@@ -126,8 +130,7 @@ int main(int argc, char** argv) {
 
     // Exchange initial information 
     if(num_procs > 1) {
-      MPI_Request info_reqs[num_procs-1];
-      uint32_t to_send[] = {grid_width, kern_width};
+      const uint32_t to_send[] = {grid_width, kern_width};
       for (int p = 1; p < num_procs; p++)
         MPI_Isend(to_send, 2, MPI_UINT32_T, p, p, MPI_COMM_WORLD, &info_reqs[p-1]);
     }
@@ -138,7 +141,6 @@ int main(int argc, char** argv) {
     read_float_matrix(fp_kernel, kernel, kern_elems);
 
     if(num_procs > 1) {
-      MPI_Request kern_reqs[num_procs-1];
       for (int p = 1; p < num_procs; p++)
         MPI_Isend(kernel, kern_elems, MPI_FLOAT, p, p, MPI_COMM_WORLD, &kern_reqs[p-1]);
     }
@@ -169,14 +171,9 @@ int main(int argc, char** argv) {
 
     // Grid distribution
     if(num_procs > 1) {
-      MPI_Request grid_scatter_reqs[num_procs-1];
-      for(int p = 1; p < num_procs; p++) {
-        MPI_Isend(&old_grid[setup.procs_info[p].sstart], setup.procs_info[p].ssize, MPI_FLOAT, p, p, MPI_COMM_WORLD, &grid_scatter_reqs[p-1]);
-      }
+      for(int p = 1; p < num_procs; p++)
+        MPI_Isend(&old_grid[setup.procs_info[p].sstart], setup.procs_info[p].ssize, MPI_FLOAT, p, p, MPI_COMM_WORLD, &grid_reqs[p-1]);
     }
-
-    fclose(fp_kernel);
-    fclose(fp_grid);
   } else {
     uint32_t to_recv[2];
     MPI_Recv(to_recv, 2, MPI_UINT32_T, 0, rank, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -258,6 +255,10 @@ int main(int argc, char** argv) {
   }
 
   MPI_Finalize();
+  if(!rank) {
+    fclose(fp_kernel);
+    fclose(fp_grid);
+  }
   free(thread_measures);
   free(setup.handlers);
   free(new_grid);
@@ -278,9 +279,9 @@ void* setup_thread(void* args) {
 
   // Rank 0 get info about which processes must compute an additional row, other ranks get info only about themself
   get_process_additional_row(setup.procs_info); 
-  const uint min_nrows = (grid_width / num_procs);                            // Minimum amout of rows distributed to each process
+  const uint min_nrows = (grid_width / num_procs);                         // Minimum amout of rows distributed to each process
   proc_nrows = min_nrows + setup.procs_info[0].has_additional_row;         // Number of rows assigned to current process
-  const uint proc_nrows_size = proc_nrows * grid_width;                 // Number of elements assigned to a process
+  const uint proc_nrows_size = proc_nrows * grid_width;                    // Number of elements assigned to a process
 
   if(!rank) {
     new_grid = malloc((grid_elems + pad_elems*2) * sizeof(float));
@@ -316,7 +317,7 @@ void* setup_thread(void* args) {
     }
   } else {
     // Receive grid data
-    int recv_size = (proc_nrows + pad_nrows * 2) * grid_width;
+    uint recv_size = (proc_nrows + pad_nrows * 2) * grid_width;
     if(rank == num_procs-1) recv_size -= grid_width;
     MPI_Irecv(old_grid, recv_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &(setup.requests[1]));
   }
@@ -343,7 +344,7 @@ void* setup_thread(void* args) {
 
   // Managing lb handler and mt handler connections
   lb.handler->tid = -1;
-  lb.handler->top = &handlers[num_threads/2-1];          // top neighbour is always the same
+  lb.handler->top = &handlers[num_threads/2-1];             // top neighbour is always the same
   handlers[num_threads/2-1].bottom = lb.handler;
   struct thread_handler* mth = &handlers[num_threads/2];    // main thread handler (tid == num_threads/2)
 
@@ -429,7 +430,6 @@ void* coordinator_thread(void* args) {
   float *my_old_grid = old_grid;
   float *my_new_grid = new_grid;
   float *tmp;                                       // Used only for grid swap
-  uint8_t prev_odd = 1;                             // If previous iteration index was odd
   uint8_t changes = 0;                              // If no changes have been made (or cannot be made), main thread will wait
   struct local_data local = {0};
   struct node_data node = {0};
@@ -535,7 +535,6 @@ void* coordinator_thread(void* args) {
   // Second or higher convolution iterations
   int* completed = local.completed;
   for(int iter = 1; iter < num_iterations; iter++) {
-    prev_odd = !prev_odd;
     tmp = my_old_grid;
     my_old_grid = my_new_grid;
     my_new_grid = tmp;
@@ -621,6 +620,7 @@ void* worker_thread(void* args) {
   }
   if(num_procs > 1 || handler->tid != num_threads/2)
     initialize_thread_coordinates(handler);
+  const uint actual_end = handler->end-pad_elems;   // Where central part ends
 
   local.self = handler;
   local.neigh[TOP] = handler->top;
@@ -687,7 +687,6 @@ void* worker_thread(void* args) {
       // Computing central rows one at a time if top and bottom rows are incomplete
       if(!completed[CENTER]) {
         uint center_end;
-        uint actual_end = handler->end - pad_elems;
         if (completed[TOP] && completed[BOTTOM]) {
           center_end = actual_end;
           completed[CENTER] = 1;
@@ -728,14 +727,14 @@ void* worker_thread(void* args) {
 
 /* Threads that ended their iteration earlier will compute a shared portion of the matrix */
 void load_balancing(int iter, uint8_t single_work, long_long** meas){
-  const uint8_t prev_odd = (!iter) ? 1 : (iter-1) % 2;
+  const uint8_t iter_even = (!iter) ? 1 : !(iter % 2);               // If current iteration is even or odd
   uint start = 0, end = 0;
   long_long t;
   long_long *handlers_mutex_wait_time = meas[1];
   long_long *lb_mutex_wait_time = meas[3];
 
   float *my_new_grid, *my_old_grid;
-  if(!prev_odd) {
+  if(!iter_even) {
     my_new_grid = old_grid;
     my_old_grid = new_grid;
   } else {
@@ -804,7 +803,7 @@ void load_balancing(int iter, uint8_t single_work, long_long** meas){
       t = PAPI_get_real_usec();
       pthread_mutex_lock(&(neigh_handler->mutex));
       *handlers_mutex_wait_time += PAPI_get_real_usec() - t;
-      while(!rows_to_wait[prev_odd])
+      while(!rows_to_wait[iter_even])
         pthread_cond_wait(&(neigh_handler->pad_ready), &(neigh_handler->mutex));
       pthread_mutex_unlock(&(neigh_handler->mutex));
     }
@@ -817,8 +816,8 @@ void load_balancing(int iter, uint8_t single_work, long_long** meas){
       *handlers_mutex_wait_time += PAPI_get_real_usec() - t;
       (*pad_counter)++;
       if(*pad_counter == pad_nrows) {
-        rows_to_wait[prev_odd] = 0;
-        rows_to_assert[!prev_odd] = 1;
+        rows_to_wait[iter_even] = 0;
+        rows_to_assert[!iter_even] = 1;
         *pad_counter = 0;
         pthread_cond_broadcast(&(lb.handler->pad_ready));
       }
@@ -903,9 +902,9 @@ void load_balancing_custom(int iter, uint* work_nrows, uint8_t check_for_more_wo
 
 /* Test if pad rows are ready. If they are, compute their convolution and send/signal their completion */
 void thread_polling(uint8_t pos, uint iter, struct local_data* ld, long_long** meas) {
-  uint8_t prev_odd = (iter-1) % 2;                     // If previous iteration was odd or even
-  uint8_t* rtw = &ld->rows_to_wait[pos][prev_odd];     // pos: TOP or BOTTOM; prev_odd:  CURR iteration index
-  uint8_t* rta = &ld->rows_to_assert[pos][!prev_odd];  // pos: TOP or BOTTOM; !prev_odd: NEXT iteration index
+  const uint8_t iter_even = !(iter % 2);               // If current iteration is even or odd
+  uint8_t* rtw = &ld->rows_to_wait[pos][iter_even];    // pos: TOP or BOTTOM; iter_even: previous iteration
+  uint8_t* rta = &ld->rows_to_assert[pos][!iter_even]; // pos: TOP or BOTTOM; !iter_even: current iteration
   long_long *condition_wait_time = meas[0];
   long_long tmp;
 
@@ -953,7 +952,7 @@ void thread_polling(uint8_t pos, uint iter, struct local_data* ld, long_long** m
   if(!ld->completed[pos]) return;
   long_long *handler_mutex_wait_time = meas[1];
   float *my_new_grid, *my_old_grid;
-  if(!prev_odd) {
+  if(!iter_even) {
     my_new_grid = old_grid;
     my_old_grid = new_grid;
   } else {
@@ -961,7 +960,7 @@ void thread_polling(uint8_t pos, uint iter, struct local_data* ld, long_long** m
     my_old_grid = old_grid;
   }
   
-  int start = (pos == TOP) ? ld->self->start : (ld->self->end - pad_elems);
+  const int start = (pos == TOP) ? ld->self->start : (ld->self->end - pad_elems);
   conv_subgrid(my_old_grid, my_new_grid, start, (start + pad_elems));
 
   // Signal/Send pad completion if a next convolution iteration exists
@@ -976,22 +975,22 @@ void thread_polling(uint8_t pos, uint iter, struct local_data* ld, long_long** m
 
 /* Test if pad rows are ready. If they are, compute their convolution and send/signal their completion */
 void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_data* nd, long_long** meas) {
-  uint8_t prev_odd = (iter-1) % 2;                     // If previous iteration was odd or even
-  uint8_t* rtw = &ld->rows_to_wait[pos][prev_odd];     // pos: TOP or BOTTOM; prev_odd: CURR or NEXT iteration index
-  uint8_t* rta = &ld->rows_to_assert[pos][!prev_odd];  // pos: TOP or BOTTOM; prev_odd: CURR or NEXT iteration index
-  int offset = nd->req_offset[pos];
+  const uint8_t iter_even = !(iter % 2);                // If current iteration is even or odd
+  uint8_t* rtw = &ld->rows_to_wait[pos][iter_even];     // pos: TOP or BOTTOM; iter_even: previous iteration
+  uint8_t* rta = &ld->rows_to_assert[pos][!iter_even];  // pos: TOP or BOTTOM; !iter_even: current iteration
+  const int offset = nd->req_offset[pos];
   long_long *handler_mutex_wait_time = meas[1];
   long_long tmp;
   
   // Check if MPI requests have been completed
-  if(!nd->requests_completed[offset + prev_odd] || !nd->requests_completed[offset + 2]) {
+  if(!nd->requests_completed[offset + iter_even] || !nd->requests_completed[offset + 2]) {
     int indexes[SIM_REQS], outcount;
     MPI_Testsome(SIM_REQS, nd->requests, &outcount, indexes, nd->statuses);
     for(int i = 0; i < outcount; i++) nd->requests_completed[indexes[i]] = 1;
   }
 
   // If MPI requests have been completed, check if local neighbour has computed its bordering rows
-  if(nd->requests_completed[offset + prev_odd] && nd->requests_completed[offset + 2]) {
+  if(nd->requests_completed[offset + iter_even] && nd->requests_completed[offset + 2]) {
     tmp = PAPI_get_real_usec();
     pthread_mutex_lock(&(ld->neigh[pos]->mutex));
     *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
@@ -1006,7 +1005,7 @@ void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_dat
   if(!ld->completed[pos]) return; 
 
   float *my_new_grid, *my_old_grid;
-  if(!prev_odd) {
+  if(!iter_even) {
     my_new_grid = old_grid;
     my_old_grid = new_grid;
   } else {
@@ -1014,7 +1013,7 @@ void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_dat
     my_old_grid = old_grid;
   }
   conv_subgrid(my_old_grid, my_new_grid, nd->send_position[pos], nd->send_position[pos] + pad_elems);
-  nd->requests_completed[offset + prev_odd] = 0;
+  nd->requests_completed[offset + iter_even] = 0;
   nd->requests_completed[offset + 2] = 0;
   
   // Return if there isn't a next convolution iteration
@@ -1025,19 +1024,19 @@ void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_dat
   *rta = 1;
   pthread_cond_broadcast(&(ld->self->pad_ready));
   pthread_mutex_unlock(&(ld->self->mutex));
-  MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !prev_odd]);
+  MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !iter_even]);
   MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + 2]);
 }
 
-/* */
+/* Check what coordinator thread has to wait */
 void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_long** meas) {
-  uint8_t prev_odd = (iter-1) % 2;                     // If previous iteration was odd or even
+  const uint8_t iter_even = !(iter % 2);                // If current iteration is even or odd
   long_long *condition_wait_time = meas[0];
   long_long *handler_mutex_wait_time = meas[1];
   long_long tmp;
   float *my_new_grid, *my_old_grid;
   
-  if(!prev_odd) {
+  if(!iter_even) {
     my_new_grid = old_grid;
     my_old_grid = new_grid;
   } else {
@@ -1046,11 +1045,11 @@ void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_
   }
   
   for(uint8_t pos = TOP; pos <= BOTTOM && ld->neigh[pos]; pos++) {
-    uint8_t* rtw = &ld->rows_to_wait[pos][prev_odd];     // pos: TOP or BOTTOM; prev_odd: CURR or NEXT iteration index
-    uint8_t* rta = &ld->rows_to_assert[pos][!prev_odd];  // pos: TOP or BOTTOM; prev_odd: CURR or NEXT iteration index
+    uint8_t* rtw = &ld->rows_to_wait[pos][iter_even];     // pos: TOP or BOTTOM; iter_even: previous iteration
+    uint8_t* rta = &ld->rows_to_assert[pos][!iter_even];  // pos: TOP or BOTTOM; !iter_even: current iteration
     int offset = nd->req_offset[pos];
     
-    if(!nd->requests_completed[offset + prev_odd] || !nd->requests_completed[offset + 2]) 
+    if(!nd->requests_completed[offset + iter_even] || !nd->requests_completed[offset + 2]) 
       continue;
     
     tmp = PAPI_get_real_usec();
@@ -1065,7 +1064,7 @@ void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_
     ld->completed[pos] = 1;
 
     conv_subgrid(my_old_grid, my_new_grid, nd->send_position[pos], nd->send_position[pos] + pad_elems);
-    nd->requests_completed[offset + prev_odd] = 0;
+    nd->requests_completed[offset + iter_even] = 0;
     nd->requests_completed[offset + 2] = 0;
 
     if(iter+1 == num_iterations) continue;
@@ -1075,7 +1074,7 @@ void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_
     *rta = 1;
     pthread_cond_broadcast(&(ld->self->pad_ready));
     pthread_mutex_unlock(&(ld->self->mutex));
-    MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !prev_odd]);
+    MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !iter_even]);
     MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + 2]);
   }
   
@@ -1221,8 +1220,8 @@ void get_process_additional_row(struct proc_info* procs_info) {
 */
 void initialize_thread_coordinates(struct thread_handler* handler) {
   int submatrix_id;
-  int nrows_per_thread;
-  const int num_workers = num_threads - (num_procs > 1 ? 1 : 0);
+  uint nrows_per_thread;
+  const uint num_workers = num_threads - (num_procs > 1 ? 1 : 0);
 
   if(handler->tid != -1) {
     submatrix_id = handler->tid;
@@ -1235,7 +1234,7 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
     if (lb.nrows < pad_nrows * 2) lb.nrows += (pad_nrows * 2);
 
     // Compute the amount of rows assigned to load balancer (including remainder rows and main thread)
-    int rem_rows = (proc_nrows - lb.nrows) % num_threads;
+    uint rem_rows = (proc_nrows - lb.nrows) % num_threads;
     nrows_per_thread = (proc_nrows - lb.nrows) / num_threads;
     lb.nrows += rem_rows;
     if(num_procs > 1) {
@@ -1259,9 +1258,9 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
   }
 
   // Initialize coordinates
-  const int fixed_size = nrows_per_thread * grid_width;
+  const uint fixed_size = nrows_per_thread * grid_width;
   handler->start = pad_elems + submatrix_id * fixed_size;
-  int actual_size; 
+  uint actual_size; 
   if (handler->tid == -1) {
     actual_size = lb.size;
   } else {

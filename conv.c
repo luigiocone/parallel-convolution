@@ -464,7 +464,7 @@ void* coordinator_thread(void* args) {
   local.self = handler;
 
   if(handler->top == NULL) local.completed[TOP] = 1;
-  else {
+  else if(num_iterations > 1) {
     node.neighbour[TOP] = rank+1;
     node.req_offset[TOP] = SIM_REQS/2;
     node.send_position[TOP] = bottom_pad_start;
@@ -475,7 +475,7 @@ void* coordinator_thread(void* args) {
   }
 
   if(handler->bottom == NULL) local.completed[BOTTOM] = 1;
-  else {
+  else if(num_iterations > 1) {
     node.neighbour[BOTTOM] = rank-1;
     node.req_offset[BOTTOM] = 0;
     node.send_position[BOTTOM] = pad_elems;
@@ -512,22 +512,28 @@ void* coordinator_thread(void* args) {
   // First convolution iteration (starting with top and bottom mpi rows)
   if(handler->bottom != NULL) {
     conv_subgrid(my_old_grid, my_new_grid, pad_elems, pad_elems*2);
-    MPI_Isend(&my_new_grid[node.send_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[0]);
-    MPI_Irecv(&my_new_grid[node.recv_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[2]);
+    if(num_iterations > 1) {
+      MPI_Isend(&my_new_grid[node.send_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[0]);
+      MPI_Irecv(&my_new_grid[node.recv_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[2]);
+    }
   }
   if(handler->top != NULL) {
     conv_subgrid(my_old_grid, my_new_grid, bottom_pad_start, bottom_pad_start + pad_elems);
-    MPI_Isend(&my_new_grid[node.send_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[0 + SIM_REQS/2]);
-    MPI_Irecv(&my_new_grid[node.recv_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[2 + SIM_REQS/2]);
+    if(num_iterations > 1) {
+      MPI_Isend(&my_new_grid[node.send_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[0 + SIM_REQS/2]);
+      MPI_Irecv(&my_new_grid[node.recv_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[2 + SIM_REQS/2]);
+    }
   }
 
-  t = PAPI_get_real_usec();
-  pthread_mutex_lock(&(handler->mutex));
-  handler_mutex_wait_time += PAPI_get_real_usec() - t;
-  handler->top_rows_done[0] = 1;
-  handler->bot_rows_done[0] = 1;
-  pthread_cond_broadcast(&(handler->pad_ready));
-  pthread_mutex_unlock(&(handler->mutex));
+  if(num_iterations > 1) {
+    t = PAPI_get_real_usec();
+    pthread_mutex_lock(&(handler->mutex));
+    handler_mutex_wait_time += PAPI_get_real_usec() - t;
+    handler->top_rows_done[0] = 1;
+    handler->bot_rows_done[0] = 1;
+    pthread_cond_broadcast(&(handler->pad_ready));
+    pthread_mutex_unlock(&(handler->mutex));
+  }
 
   // Complete the first convolution iteration by computing central elements
   if(!lb.iter) load_balancing(0, 0, measures);
@@ -622,14 +628,6 @@ void* worker_thread(void* args) {
     initialize_thread_coordinates(handler);
   const uint actual_end = handler->end-pad_elems;   // Where central part ends
 
-  local.self = handler;
-  local.neigh[TOP] = handler->top;
-  local.neigh[BOTTOM] = handler->bottom;
-  local.rows_to_assert[TOP] = handler->top_rows_done;
-  local.rows_to_assert[BOTTOM] = handler->bot_rows_done;
-  if(local.neigh[TOP]) local.rows_to_wait[TOP] = handler->top->bot_rows_done;
-  if(local.neigh[BOTTOM]) local.rows_to_wait[BOTTOM] = handler->bottom->top_rows_done;
-
   // Compute "sum(dot(kernel, kernel))" if there is only one process
   if(!handler->tid && num_procs == 1) {
     for(int pos = 0; pos < kern_elems; pos++) {
@@ -651,13 +649,23 @@ void* worker_thread(void* args) {
   conv_subgrid(my_old_grid, my_new_grid, handler->start, (handler->start + pad_elems));
   conv_subgrid(my_old_grid, my_new_grid, (handler->end - pad_elems), handler->end);
 
-  t = PAPI_get_real_usec();
-  pthread_mutex_lock(&(handler->mutex));
-  handler_mutex_wait_time += PAPI_get_real_usec() - t;
-  handler->top_rows_done[0] = 1;
-  handler->bot_rows_done[0] = 1;
-  pthread_cond_broadcast(&(handler->pad_ready));
-  pthread_mutex_unlock(&(handler->mutex));
+  if(num_iterations > 1) {
+    t = PAPI_get_real_usec();
+    pthread_mutex_lock(&(handler->mutex));
+    handler_mutex_wait_time += PAPI_get_real_usec() - t;
+    handler->top_rows_done[0] = 1;
+    handler->bot_rows_done[0] = 1;
+    pthread_cond_broadcast(&(handler->pad_ready));
+    pthread_mutex_unlock(&(handler->mutex));
+
+    local.self = handler;
+    local.neigh[TOP] = handler->top;
+    local.neigh[BOTTOM] = handler->bottom;
+    local.rows_to_assert[TOP] = handler->top_rows_done;
+    local.rows_to_assert[BOTTOM] = handler->bot_rows_done;
+    if(local.neigh[TOP]) local.rows_to_wait[TOP] = handler->top->bot_rows_done;
+    if(local.neigh[BOTTOM]) local.rows_to_wait[BOTTOM] = handler->bottom->top_rows_done;
+  }
 
   // Complete the first convolution iteration by computing central elements
   conv_subgrid(my_old_grid, my_new_grid, (handler->start + pad_elems), (handler->end - pad_elems));

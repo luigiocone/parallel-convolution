@@ -94,17 +94,10 @@ int main(int argc, char** argv) {
   for(int pos = 0; pos < kern_elems; pos++)
     kern_dot_sum += kernel[pos] * kernel[pos];
 
-  /* Computation of "last_mask" */
-  uint rem = kern_width % VEC_SIZE;
-  uint32_t to_load[VEC_SIZE];
-  memset(to_load, 0, VEC_SIZE * sizeof(uint32_t));
-  for(int i = 0; i < rem; i++) to_load[i] = UINT32_MAX;       /* UINT32_MAX = -1 */
-  last_mask = _mm_loadu_si128((__m128i*) to_load);
-
   /* Data splitting */
   const uint start = pad_elems;                               /* Index of the first row for current process */
   const uint end = grid_elems + pad_elems;                    /* Index of the final row for current process */
-  const uint proc_nrows = grid_width;                      /* Number of rows assigned to a process */
+  const uint proc_nrows = grid_width;                         /* Number of rows assigned to a process */
 
   /* Read grid data */
   new_grid = malloc((proc_nrows + pad_nrows*2) * grid_width * sizeof(float));
@@ -114,6 +107,13 @@ int main(int argc, char** argv) {
   memset(&new_grid[(proc_nrows+pad_nrows) * grid_width], 0, pad_elems * sizeof(float));
   memset(&old_grid[(proc_nrows+pad_nrows) * grid_width], 0, pad_elems * sizeof(float));
   read_float_matrix(fp_grid, &old_grid[pad_elems], grid_elems);
+
+  /* Computation of "last_mask" */
+  uint rem = kern_width % VEC_SIZE;
+  uint32_t to_load[VEC_SIZE];
+  memset(to_load, 0, VEC_SIZE * sizeof(uint32_t));
+  for(int i = 0; i < rem; i++) to_load[i] = UINT32_MAX;       // UINT32_MAX = -1
+  last_mask = _mm_loadu_si128((__m128i*) to_load);
  
   /* Second (or higher) iterations */
   float *tmp_grid;

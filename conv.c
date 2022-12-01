@@ -273,7 +273,13 @@ int main(int argc, char** argv) {
  * threads and setup their handler connections. Ranks different from 0 make also some MPI calls to start data
  * receiving. Some synchronization is needed if read from disk end earlier.
 */
-void* setup_thread(void* args) {
+void* setup_thread(void* args) { 
+  // Checking if input is big enough for work division between threads and load balancing 
+  if(grid_width/(num_procs * num_threads + num_procs) < pad_nrows * 3) {
+    fprintf(stderr, "Threading is oversized compared to input matrix. Threads: %dx%d | Input number of rows: %d\n", num_procs, num_threads, grid_width);
+    exit(-1);
+  }
+
   const uint rbf = pad_nrows + WORKER_FACTOR;       // Rows before polling. How many rows must be computed before polling the neighbours
   rbf_elems = rbf * grid_width;                     // Rows before polling number of float elements
 
@@ -466,7 +472,7 @@ void* coordinator_thread(void* args) {
   if(handler->top == NULL) local.completed[TOP] = 1;
   else if(num_iterations > 1) {
     node.neighbour[TOP] = rank+1;
-    node.req_offset[TOP] = SIM_REQS/2;
+    node.send_offset[TOP] = SIM_RECV + TOP*SIM_RECV;
     node.send_position[TOP] = bottom_pad_start;
     node.recv_position[TOP] = bottom_pad_start + pad_elems;
     local.neigh[TOP] = handler->top;
@@ -477,7 +483,7 @@ void* coordinator_thread(void* args) {
   if(handler->bottom == NULL) local.completed[BOTTOM] = 1;
   else if(num_iterations > 1) {
     node.neighbour[BOTTOM] = rank-1;
-    node.req_offset[BOTTOM] = 0;
+    node.send_offset[BOTTOM] = SIM_RECV + BOTTOM*SIM_RECV;
     node.send_position[BOTTOM] = pad_elems;
     node.recv_position[BOTTOM] = 0;
     local.neigh[BOTTOM] = handler->bottom;
@@ -513,15 +519,15 @@ void* coordinator_thread(void* args) {
   if(handler->bottom != NULL) {
     conv_subgrid(my_old_grid, my_new_grid, pad_elems, pad_elems*2);
     if(num_iterations > 1) {
-      MPI_Isend(&my_new_grid[node.send_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[0]);
-      MPI_Irecv(&my_new_grid[node.recv_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[2]);
+      MPI_Isend(&my_new_grid[node.send_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[node.send_offset[BOTTOM]]);
+      MPI_Irecv(&my_new_grid[node.recv_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[BOTTOM]);
     }
   }
   if(handler->top != NULL) {
     conv_subgrid(my_old_grid, my_new_grid, bottom_pad_start, bottom_pad_start + pad_elems);
     if(num_iterations > 1) {
-      MPI_Isend(&my_new_grid[node.send_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[0 + SIM_REQS/2]);
-      MPI_Irecv(&my_new_grid[node.recv_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[2 + SIM_REQS/2]);
+      MPI_Isend(&my_new_grid[node.send_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[node.send_offset[TOP]]);
+      MPI_Irecv(&my_new_grid[node.recv_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[TOP]);
     }
   }
 
@@ -986,19 +992,18 @@ void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_dat
   const uint8_t iter_even = !(iter % 2);                // If current iteration is even or odd
   uint8_t* rtw = &ld->rows_to_wait[pos][iter_even];     // pos: TOP or BOTTOM; iter_even: previous iteration
   uint8_t* rta = &ld->rows_to_assert[pos][!iter_even];  // pos: TOP or BOTTOM; !iter_even: current iteration
-  const int offset = nd->req_offset[pos];
   long_long *handler_mutex_wait_time = meas[1];
   long_long tmp;
   
-  // Check if MPI requests have been completed
-  if(!nd->requests_completed[offset + iter_even] || !nd->requests_completed[offset + 2]) {
-    int indexes[SIM_REQS], outcount;
-    MPI_Testsome(SIM_REQS, nd->requests, &outcount, indexes, nd->statuses);
-    for(int i = 0; i < outcount; i++) nd->requests_completed[indexes[i]] = 1;
+  // Check if MPI receive requests have been completed
+  if(!nd->recv_completed[pos]) {
+    int indexes[SIM_RECV], outcount;
+    MPI_Testsome(SIM_RECV, nd->requests, &outcount, indexes, nd->statuses);
+    for(int i = 0; i < outcount; i++) nd->recv_completed[indexes[i]] = 1;
   }
 
   // If MPI requests have been completed, check if local neighbour has computed its bordering rows
-  if(nd->requests_completed[offset + iter_even] && nd->requests_completed[offset + 2]) {
+  if(nd->recv_completed[pos]) {
     tmp = PAPI_get_real_usec();
     pthread_mutex_lock(&(ld->neigh[pos]->mutex));
     *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
@@ -1021,11 +1026,11 @@ void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_dat
     my_old_grid = old_grid;
   }
   conv_subgrid(my_old_grid, my_new_grid, nd->send_position[pos], nd->send_position[pos] + pad_elems);
-  nd->requests_completed[offset + iter_even] = 0;
-  nd->requests_completed[offset + 2] = 0;
+  nd->recv_completed[pos] = 0;
   
   // Return if there isn't a next convolution iteration
-  if(iter+1 == num_iterations) return; 
+  if(iter+1 == num_iterations) return;
+  const uint8_t offset = nd->send_offset[pos];
   tmp = PAPI_get_real_usec();
   pthread_mutex_lock(&(ld->self->mutex));
   *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
@@ -1033,7 +1038,7 @@ void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_dat
   pthread_cond_broadcast(&(ld->self->pad_ready));
   pthread_mutex_unlock(&(ld->self->mutex));
   MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !iter_even]);
-  MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + 2]);
+  MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[pos]);
 }
 
 /* Check what coordinator thread has to wait */
@@ -1055,25 +1060,24 @@ void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_
   for(uint8_t pos = TOP; pos <= BOTTOM && ld->neigh[pos]; pos++) {
     uint8_t* rtw = &ld->rows_to_wait[pos][iter_even];     // pos: TOP or BOTTOM; iter_even: previous iteration
     uint8_t* rta = &ld->rows_to_assert[pos][!iter_even];  // pos: TOP or BOTTOM; !iter_even: current iteration
-    int offset = nd->req_offset[pos];
+    uint8_t offset = nd->send_offset[pos];
     
-    if(!nd->requests_completed[offset + iter_even] || !nd->requests_completed[offset + 2]) 
-      continue;
+    if(!nd->recv_completed[pos] || ld->completed[pos]) continue;
     
     tmp = PAPI_get_real_usec();
     pthread_mutex_lock(&(ld->neigh[pos]->mutex));
     *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
-    
+
     tmp = PAPI_get_real_usec();
-    while(!(*rtw)) pthread_cond_wait(&(ld->neigh[pos]->pad_ready), &(ld->neigh[pos]->mutex));
+    while(!(*rtw))
+      pthread_cond_wait(&(ld->neigh[pos]->pad_ready), &(ld->neigh[pos]->mutex));
     *condition_wait_time += PAPI_get_real_usec() - tmp;
     *rtw = 0;
     pthread_mutex_unlock(&(ld->neigh[pos]->mutex));
     ld->completed[pos] = 1;
 
     conv_subgrid(my_old_grid, my_new_grid, nd->send_position[pos], nd->send_position[pos] + pad_elems);
-    nd->requests_completed[offset + iter_even] = 0;
-    nd->requests_completed[offset + 2] = 0;
+    nd->recv_completed[pos] = 0;
 
     if(iter+1 == num_iterations) continue;
     tmp = PAPI_get_real_usec();
@@ -1083,13 +1087,13 @@ void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_
     pthread_cond_broadcast(&(ld->self->pad_ready));
     pthread_mutex_unlock(&(ld->self->mutex));
     MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !iter_even]);
-    MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + 2]);
+    MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[pos]);
   }
   
   if(ld->completed[TOP] && ld->completed[BOTTOM]) return;
-  int indexes[SIM_REQS], outcount;
-  MPI_Waitsome(SIM_REQS, nd->requests, &outcount, indexes, nd->statuses);
-  for(int i = 0; i < outcount; i++) nd->requests_completed[indexes[i]] = 1;
+  int indexes[SIM_RECV], outcount;
+  MPI_Waitsome(SIM_RECV, nd->requests, &outcount, indexes, nd->statuses);
+  for(int i = 0; i < outcount; i++) nd->recv_completed[indexes[i]] = 1;
 }
 
 /* Compute convolution of "sub_grid" in the specified range. Save the result in "new_grid" */

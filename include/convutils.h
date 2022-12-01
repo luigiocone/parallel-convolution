@@ -1,6 +1,11 @@
 #ifndef CONVUTILS_H
 #define CONVUTILS_H
-#define SIM_REQS 6                    // Per-process max number of simultaneous MPI requests
+
+#define SIM_RECV 2                                // Per-process max number of simultaneous MPI receive requests (from TOP and BOTTOM)
+#define SIM_REQS (SIM_RECV * 3)                   // Per-process max number of simultaneous MPI requests
+#define DEBUG_EXP_CHARS 13                        // Number of chars for format "%+e" used in float to echars conversion
+#define DEBUG_TXT_PATH "./io-files/result.txt"    // Path of the file where the result matrix will be saved in textual mode
+#define DEBUG_BIN_PATH "./io-files/result.bin"    // Path of the file where the result matrix will be saved in binary mode
 
 extern uint grid_elems, pad_elems, grid_width; 
 extern int num_threads;
@@ -46,13 +51,13 @@ struct setup_args {
 };
 
 struct node_data {                    // Data used to interact with distributed memory neighbours
-  MPI_Request requests[SIM_REQS];     // There are at most two "Isend" and one "Irecv" not completed at the same time per worker_thread, hence six per process
+  MPI_Request requests[SIM_REQS];     // There are at most two "Isend" and one "Irecv" not completed at the same time per pad, hence six per process
   MPI_Status statuses[SIM_REQS];
-  int requests_completed[SIM_REQS];   // Log of completed MPI requests
-  uint send_position[2];              // Grid position of data that will be sent by MPI
-  uint recv_position[2];              // Where the payload received (through MPI) should be stored
-  int neighbour[2];                   // MPI rank of the neighbour process (TOP and BOTTOM)
-  uint8_t req_offset[2];              // Used to reference the correct request
+  int recv_completed[SIM_RECV];       // Log of completed MPI receive (no need to check send)
+  uint send_position[SIM_RECV];       // Grid position of data that will be sent by MPI
+  uint recv_position[SIM_RECV];       // Where the payload received (through MPI) should be stored
+  int neighbour[SIM_RECV];            // MPI rank of the neighbour process (TOP and BOTTOM)
+  uint8_t send_offset[SIM_RECV];      // Used to reference the send request
 };
 
 struct local_data {                   // Data used to interact with shared memory neighbours

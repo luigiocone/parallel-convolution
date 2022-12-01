@@ -8,10 +8,6 @@
 #include <unistd.h>
 #include "convutils.h"
 
-#define EXP_CHARS 13
-#define DEBUG_TXT_PATH "./io-files/result.txt"
-#define DEBUG_BIN_PATH "./io-files/result.bin"
-
 /* Set thread affinity. If there are more threads than cores, no affinity will be set */
 int stick_this_thread_to_core(int core_id) {
   const long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
@@ -64,7 +60,7 @@ void save_txt(float* res_grid){
     return;
   }
 
-  char* char_buffer = malloc(sizeof(char) * (grid_elems*2) * (EXP_CHARS + 1));
+  char* char_buffer = malloc(sizeof(char) * (grid_elems*2) * (DEBUG_EXP_CHARS + 1));
   const uint count = floats_to_echars(&res_grid[pad_elems], char_buffer, grid_elems, grid_width);
   const uint char_written = fwrite(char_buffer, sizeof(char), count, fp_result_txt);
   free(char_buffer);

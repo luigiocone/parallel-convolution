@@ -48,7 +48,8 @@ seq
 *.idb
 *.pdb
 *test.c
-io-files/result*
+**/io-files/result*
+
 
 # Kernel Module Compile Results
 *.mod*

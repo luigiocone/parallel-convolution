@@ -1108,9 +1108,8 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
   int kern_index;                          // Current position in kernel matrix
   int kern_end;                            // Describes when it's time to change row
   int iterations;                          // How many iterations are necessary to calc a single value of "new_grid"
-  __m128 vec_grid, vec_kern, vec_temp;     // Floating point vector for grid and kernel (plus a temp vector)
-  __m128 vec_rslt;                         // Floating point vector of result, will be reduced at the end
-  __m128 vec_mxds;                         // Floating point vector of matrix dot sum, will be reduced at the end
+  __m128 vec_grid, vec_kern, vec_temp;     // 4xF32 vector for grid and kernel (plus a temp vector)
+  __m128 vec_mxds, vec_rslt;               // 4xF32 vector of matrix dot sum and result, will be reduced at the end
 
   for(int i = start_index; i < end_index; i++) {
     // Setting indexes for current element
@@ -1143,10 +1142,13 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
         for(offset = 0; offset < kern_width; offset += VEC_SIZE) {     // For every ps_vector in a kernel (and grid) row
           if(offset + VEC_SIZE < kern_width) {                         // If this isn't the final iteration of this loop, load a full vector
             vec_grid = _mm_loadu_ps(&sub_grid[grid_index+offset]);
+            vec_kern = _mm_loadu_ps(&kernel[kern_index+offset]);
           } else {
             vec_grid = _mm_maskload_ps(&sub_grid[grid_index+offset], last_mask);
+            vec_kern = _mm_maskload_ps(&kernel[kern_index+offset], last_mask);
+            //cmp_mask = _mm_cmpeq_ps(vec_kern, vec_kern);               // Comparing NaN value always return false
+            //vec_kern = _mm_and_ps(vec_kern, cmp_mask);                 // NaN value are now 0
           }
-          vec_kern = _mm_loadu_ps(&kernel[kern_index+offset]);
           vec_temp = _mm_mul_ps(vec_grid, vec_kern);
           vec_rslt = _mm_add_ps(vec_rslt, vec_temp);
           vec_temp = _mm_mul_ps(vec_grid, vec_grid);

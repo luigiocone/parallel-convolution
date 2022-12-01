@@ -40,6 +40,7 @@
 *.x86_64
 *.hex
 conv
+seq
 
 # Debug files
 *.dSYM/

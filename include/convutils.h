@@ -3,7 +3,7 @@
 
 #define SIM_RECV 2                                // Per-process max number of simultaneous MPI receive requests (from TOP and BOTTOM)
 #define SIM_REQS (SIM_RECV * 3)                   // Per-process max number of simultaneous MPI requests
-#define DEBUG_EXP_CHARS 13                        // Number of chars for format "%+e" used in float to echars conversion
+#define DEBUG_EXP_CHARS 13                        // Format "%+e" has this num of chars (e.g. -9.075626e+20)
 #define DEBUG_TXT_PATH "./io-files/result.txt"    // Path of the file where the result matrix will be saved in textual mode
 #define DEBUG_BIN_PATH "./io-files/result.bin"    // Path of the file where the result matrix will be saved in binary mode
 

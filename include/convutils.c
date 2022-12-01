@@ -56,7 +56,7 @@ int floats_to_echars(float *float_buffer, char* char_buffer, int count, int row_
 void save_txt(float* res_grid){
   FILE* fp_result_txt;
   if((fp_result_txt = fopen(DEBUG_TXT_PATH, "w")) == NULL) {
-    fprintf(stderr, "Error while opening txt result debug file\n");
+    perror("Error while opening txt result debug file\n");
     return;
   }
 
@@ -79,7 +79,7 @@ void save_txt(float* res_grid){
 void save_bin(float* res_grid){
   FILE* fp_result_bin;
   if ((fp_result_bin = fopen(DEBUG_BIN_PATH, "wb")) == NULL) {
-    fprintf(stderr, "Error while opening bin result debug file\n");
+    perror("Error while opening bin result debug file\n");
     return;
   }
   

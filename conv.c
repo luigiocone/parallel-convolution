@@ -114,11 +114,11 @@ int main(int argc, char** argv) {
   if(!rank) {
     // Opening input files
     if((fp_grid = fopen(GRID_FILE_PATH, "rb")) == NULL) {
-      fprintf(stderr, "Error while opening grid file\n");
+      perror("Error while opening grid file:");
       exit(-1);
     }
     if((fp_kernel = fopen(KERNEL_FILE_PATH, "rb")) == NULL) {
-      fprintf(stderr, "Error while opening kernel file\n");
+      perror("Error while opening kernel file:");
       exit(-1);
     }
 
@@ -403,7 +403,7 @@ void* setup_thread(void* args) {
   uint32_t rem = kern_width % VEC_SIZE;
   uint32_t to_load[VEC_SIZE];
   memset(to_load, 0, VEC_SIZE * sizeof(uint32_t));
-  for(int i = 0; i < rem; i++) to_load[i] = UINT32_MAX;
+  for(int i = 0; i < rem; i++) to_load[i] = UINT32_MAX;        // UINT32_MAX = -1
   last_mask = _mm_loadu_si128((__m128i*) to_load);
 
   setup.handlers = handlers;
@@ -1146,8 +1146,6 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
           } else {
             vec_grid = _mm_maskload_ps(&sub_grid[grid_index+offset], last_mask);
             vec_kern = _mm_maskload_ps(&kernel[kern_index+offset], last_mask);
-            //cmp_mask = _mm_cmpeq_ps(vec_kern, vec_kern);               // Comparing NaN value always return false
-            //vec_kern = _mm_and_ps(vec_kern, cmp_mask);                 // NaN value are now 0
           }
           vec_temp = _mm_mul_ps(vec_grid, vec_kern);
           vec_rslt = _mm_add_ps(vec_rslt, vec_temp);

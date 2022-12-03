@@ -19,8 +19,7 @@ enum POSITIONS {                      // Submatrix positions of interests for de
 enum DATA {                           // Data that setup thread must prepare before starting convolution
     GRID = 0,
     KERNEL = 1,
-    HANDLERS = 2,
-    SEND_INFO = 3
+    SEND_INFO = 2
 };
 
 struct thread_handler {               // Used by active threads to handle a matrix portion and to synchronize with neighbours

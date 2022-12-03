@@ -34,19 +34,17 @@ struct thread_handler {               // Used by active threads to handle a matr
   pthread_cond_t pad_ready;           // Thread will wait if neighbour's top and bottom rows (pads) aren't ready
 };
 
-/*
 struct proc_info {                    // Info about data scattering and gathering
   uint8_t has_additional_row;         // If this process must compute an additional row
   uint sstart, ssize;                 // Used for initial input scattering (multiple MPI_Isend)
   uint gstart, gsize;                 // Used for final result gathering (multiple MPI_Irecv)
-};*/
+};
 
-struct setup_args {
-  MPI_Request requests[2];            // Used for grid and kernel receive
+struct io_thread_args {
+  FILE* fp_grid;                      // File containing input grid
+  MPI_Request* requests;              // Used for grid and kernel receive
   uint8_t flags[SEND_INFO+1];         // Describes if a data structure is ready to be used
-  pthread_t* threads;                 // Worker threads
   struct proc_info* procs_info;       // Info used for MPI distribution of grid
-  struct thread_handler* handlers;    // Thread handlers of main and worker threads
   pthread_mutex_t mutex;              // Mutex to access shared variables beetween main and setup thread
   pthread_cond_t cond;                // Necessary some synchronization points beetween main and setup thread
 };

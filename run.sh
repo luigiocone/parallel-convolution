@@ -9,8 +9,11 @@ fi
 WORKSPACE="/home/ocone/convolution"
 
 case $1 in
-  hpc)       # Cluster only
-    mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 500 16 1
+  hpc)
+    # InfiniBand
+    # mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 200 16 1
+    # TCP/IP over InfiniBand
+    mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 4 -machinefile mf --map-by node ./conv 200 16 1
     ;;
 
   papi)      # Temporary reduce paranoid level to allow cache event counters (PAPI)

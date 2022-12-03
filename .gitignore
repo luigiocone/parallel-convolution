@@ -49,6 +49,7 @@ seq
 *.pdb
 *test.c
 **/io-files/result*
+**/docs/presentation/performance/*
 
 
 # Kernel Module Compile Results

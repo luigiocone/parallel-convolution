@@ -20,8 +20,9 @@
 #define VEC_SIZE 4
 #define MEAN_VALUE 0
 #define WORKER_FACTOR 1               // Used to calc how many rows must be computed from worker before polling the neighbours
-#define COORDINATOR_FACTOR 3          // Used to calc how many rows must be computed from coordinator before checking MPI dependencies
-#define DEBUG 1                       // True to save result in textual and binary mode
+#define COORDINATOR_FACTOR 1          // Used to calc how many rows must be computed from coordinator before checking MPI dependencies
+#define DEBUG 0                       // True to save result in textual and binary mode
+#define SEND_OFFSET(POS) ((POS) * SIM_RECV + SIM_RECV)
 
 void *coordinator_thread(void*);
 void *worker_thread(void*);
@@ -472,7 +473,6 @@ void* coordinator_thread(void* args) {
   if(handler->top == NULL) local.completed[TOP] = 1;
   else if(num_iterations > 1) {
     node.neighbour[TOP] = rank+1;
-    node.send_offset[TOP] = SIM_RECV + TOP*SIM_RECV;
     node.send_position[TOP] = bottom_pad_start;
     node.recv_position[TOP] = bottom_pad_start + pad_elems;
     local.neigh[TOP] = handler->top;
@@ -483,7 +483,6 @@ void* coordinator_thread(void* args) {
   if(handler->bottom == NULL) local.completed[BOTTOM] = 1;
   else if(num_iterations > 1) {
     node.neighbour[BOTTOM] = rank-1;
-    node.send_offset[BOTTOM] = SIM_RECV + BOTTOM*SIM_RECV;
     node.send_position[BOTTOM] = pad_elems;
     node.recv_position[BOTTOM] = 0;
     local.neigh[BOTTOM] = handler->bottom;
@@ -519,14 +518,14 @@ void* coordinator_thread(void* args) {
   if(handler->bottom != NULL) {
     conv_subgrid(my_old_grid, my_new_grid, pad_elems, pad_elems*2);
     if(num_iterations > 1) {
-      MPI_Isend(&my_new_grid[node.send_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[node.send_offset[BOTTOM]]);
+      MPI_Isend(&my_new_grid[node.send_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[SEND_OFFSET(BOTTOM)]);
       MPI_Irecv(&my_new_grid[node.recv_position[BOTTOM]], pad_elems, MPI_FLOAT, rank-1, 0, MPI_COMM_WORLD, &node.requests[BOTTOM]);
     }
   }
   if(handler->top != NULL) {
     conv_subgrid(my_old_grid, my_new_grid, bottom_pad_start, bottom_pad_start + pad_elems);
     if(num_iterations > 1) {
-      MPI_Isend(&my_new_grid[node.send_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[node.send_offset[TOP]]);
+      MPI_Isend(&my_new_grid[node.send_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[SEND_OFFSET(TOP)]);
       MPI_Irecv(&my_new_grid[node.recv_position[TOP]], pad_elems, MPI_FLOAT, rank+1, 0, MPI_COMM_WORLD, &node.requests[TOP]);
     }
   }
@@ -943,21 +942,32 @@ void thread_polling(uint8_t pos, uint iter, struct local_data* ld, long_long** m
         ld->completed[pos] = 1;
       }
       pthread_mutex_unlock(&(ld->neigh[pos]->mutex));
-
+      
       // If neighbour part still not ready, make a single work of load balancing set of rows and wait
-      if(!ld->completed[pos]) {
-        load_balancing(iter, 1, meas);
+      while(!ld->completed[pos]) {
+        if(iter >= lb.iter){
+          load_balancing(iter, 1, meas);
+          tmp = PAPI_get_real_usec();
+          pthread_mutex_lock(&(ld->neigh[pos]->mutex));
+          *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
+          if(*rtw) {
+            *rtw = 0;
+            ld->completed[pos] = 1;
+          }
+          pthread_mutex_unlock(&(ld->neigh[pos]->mutex));
+        } else {
+          tmp = PAPI_get_real_usec();
+          pthread_mutex_lock(&(ld->neigh[pos]->mutex));
+          *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
 
-        tmp = PAPI_get_real_usec();
-        pthread_mutex_lock(&(ld->neigh[pos]->mutex));
-        *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
-        tmp = PAPI_get_real_usec();
-        while(!(*rtw))
-          pthread_cond_wait(&(ld->neigh[pos]->pad_ready), &(ld->neigh[pos]->mutex));
-        *condition_wait_time += PAPI_get_real_usec() - tmp;
-        *rtw = 0;
-        pthread_mutex_unlock(&(ld->neigh[pos]->mutex));
-        ld->completed[pos] = 1;
+          tmp = PAPI_get_real_usec();
+          while(!(*rtw))
+            pthread_cond_wait(&(ld->neigh[pos]->pad_ready), &(ld->neigh[pos]->mutex));
+          *condition_wait_time += PAPI_get_real_usec() - tmp;
+          *rtw = 0;
+          pthread_mutex_unlock(&(ld->neigh[pos]->mutex));
+          ld->completed[pos] = 1;
+        }
       }
     }
   }
@@ -1030,14 +1040,14 @@ void node_polling(uint8_t pos, uint iter, struct local_data* ld, struct node_dat
   
   // Return if there isn't a next convolution iteration
   if(iter+1 == num_iterations) return;
-  const uint8_t offset = nd->send_offset[pos];
+  const uint8_t send_offset = SEND_OFFSET(pos) + !iter_even;
   tmp = PAPI_get_real_usec();
   pthread_mutex_lock(&(ld->self->mutex));
   *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
   *rta = 1;
   pthread_cond_broadcast(&(ld->self->pad_ready));
   pthread_mutex_unlock(&(ld->self->mutex));
-  MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !iter_even]);
+  MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[send_offset]);
   MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[pos]);
 }
 
@@ -1060,7 +1070,7 @@ void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_
   for(uint8_t pos = TOP; pos <= BOTTOM && ld->neigh[pos]; pos++) {
     uint8_t* rtw = &ld->rows_to_wait[pos][iter_even];     // pos: TOP or BOTTOM; iter_even: previous iteration
     uint8_t* rta = &ld->rows_to_assert[pos][!iter_even];  // pos: TOP or BOTTOM; !iter_even: current iteration
-    uint8_t offset = nd->send_offset[pos];
+    uint8_t send_offset = SEND_OFFSET(pos) + !iter_even;
     
     if(!nd->recv_completed[pos] || ld->completed[pos]) continue;
     
@@ -1086,7 +1096,7 @@ void wait_protocol(uint iter, struct local_data* ld, struct node_data* nd, long_
     *rta = 1;
     pthread_cond_broadcast(&(ld->self->pad_ready));
     pthread_mutex_unlock(&(ld->self->mutex));
-    MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[offset + !iter_even]);
+    MPI_Isend(&my_new_grid[nd->send_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[send_offset]);
     MPI_Irecv(&my_new_grid[nd->recv_position[pos]], pad_elems, MPI_FLOAT, nd->neighbour[pos], 0, MPI_COMM_WORLD, &nd->requests[pos]);
   }
   
@@ -1133,7 +1143,7 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       iterations = kern_elems;
     }
 
-    // Convolution
+    /* Convolution
     if(iterations == kern_elems) {
       // Packed SIMD instructions for center elements
       vec_rslt = _mm_setzero_ps();
@@ -1161,7 +1171,7 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
       vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);  // Sum reduction with two horizontal sum
       vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);
       matrix_dot_sum = vec_mxds[0];
-    } else {
+    } else {*/
       // Standard convolution
       result = 0; matrix_dot_sum = 0; offset = 0;
       for (int iter=0; iter < iterations; iter++) {
@@ -1175,7 +1185,7 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
           offset = 0;
         }
       }
-    }
+   // }
 
     // Normalization (avoid NaN results by assigning the mean value if needed)
     new_grid[i] = (!matrix_dot_sum) ? MEAN_VALUE : (result / sqrt(matrix_dot_sum * kern_dot_sum));
@@ -1250,7 +1260,7 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
     nrows_per_thread = (proc_nrows - lb.nrows) / num_threads;
     lb.nrows += rem_rows;
     if(num_procs > 1) {
-      const uint offload = (pad_nrows*2 > num_threads) ? pad_nrows*2 : num_threads;
+      const uint offload = (pad_nrows*2 > num_threads) ? pad_nrows*2 : 0;
       coordinator_nrows = nrows_per_thread - offload;
       lb.nrows += coordinator_nrows;
     }

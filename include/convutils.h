@@ -57,7 +57,6 @@ struct node_data {                    // Data used to interact with distributed 
   uint send_position[SIM_RECV];       // Grid position of data that will be sent by MPI
   uint recv_position[SIM_RECV];       // Where the payload received (through MPI) should be stored
   int neighbour[SIM_RECV];            // MPI rank of the neighbour process (TOP and BOTTOM)
-  uint8_t send_offset[SIM_RECV];      // Used to reference the send request
 };
 
 struct local_data {                   // Data used to interact with shared memory neighbours

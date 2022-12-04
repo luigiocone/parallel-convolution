@@ -48,21 +48,19 @@ struct io_thread_args {
   pthread_cond_t cond;                // Necessary some synchronization points beetween main and setup thread
 };
 
-struct node_data {                    // Data used to interact with distributed memory neighbours
-  MPI_Request requests[SIM_REQS];     // There are at most two "Isend" and one "Irecv" not completed at the same time per pad, hence six per process
-  MPI_Status statuses[SIM_REQS];
-  int recv_completed[SIM_RECV];       // Log of completed MPI receive (no need to check send)
-  uint send_position[SIM_RECV];       // Grid position of data that will be sent by MPI
-  uint recv_position[SIM_RECV];       // Where the payload received (through MPI) should be stored
-  int neighbour[SIM_RECV];            // MPI rank of the neighbour process (TOP and BOTTOM)
+struct mpi_data {                     // Data used to interact with distributed memory neighbours
+  uint send_position;                 // Grid position of data that will be sent by MPI
+  uint recv_position;                 // Where the payload received (through MPI) should be stored
+  int neighbour;                      // MPI rank of the neighbour process (TOP and BOTTOM)
 };
 
-struct local_data {                   // Data used to interact with shared memory neighbours
+struct worker_data {                  // Data used to interact with shared memory neighbours
   struct thread_handler* self;        // Handler of communication promoter
   int completed[CENTER+1];            // Matrix completed positions. Indexed through enumeration (TOP, BOTTOM, ...)
   struct thread_handler* neigh[2];    // Handlers of neighbour thread (TOP and BOTTOM)
   uint8_t* rows_to_wait[2];           // Pointers to the flag to wait (TOP and BOTTOM)
   uint8_t* rows_to_assert[2];         // Pointers to the flag to signal (TOP and BOTTOM)
+  struct mpi_data* mpi;
 };
 
 struct load_balancer {                // Used by worker threads to do some additional work if they end earlier. Not an active thread

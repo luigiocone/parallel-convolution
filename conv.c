@@ -20,12 +20,12 @@
 #define VEC_SIZE 4
 #define MEAN_VALUE 0
 #define DEBUG 1                       // True to save result in textual and binary mode
-#define ROWS_BEFORE_POLLING 2         // How many rows must be computed before polling the neighbours
+#define WORKER_FACTOR 1               // Used to calc how many rows must be computed before polling the neighbours
 #define REQS_OFFSET(POS) ((POS) * SIM_REQS / 2)
 #define RECV_OFFSET(POS) (REQS_OFFSET(POS) + 2)
 
-void* worker_thread(void*);
-void* grid_input_thread(void*);
+void *worker_thread(void*);
+void *grid_io_thread(void*);
 void thread_polling(enum POSITIONS, uint, struct worker_data*, long_long**);
 void remote_polling(enum POSITIONS, uint, struct worker_data*, long_long**);
 void load_balancing(int, uint8_t, long_long**);
@@ -42,6 +42,7 @@ uint32_t kern_width;                  // Number of elements in one kernel matrix
 uint32_t grid_width;                  // Number of elements in one grid matrix row
 uint pad_nrows;                       // Number of rows that should be shared with other processes
 uint pad_elems;                       // Number of elements in the pad section of the grid matrix
+uint rbf_elems;                       // Number of elements in Rows to compute Before Polling the neighbours
 uint kern_elems;                      // Number of elements in whole kernel matrix
 uint grid_elems;                      // Number of elements in whole grid matrix
 uint proc_nrows;                      // Number of rows assigned to a process
@@ -49,7 +50,7 @@ int num_procs;                        // Number of MPI processes in the communic
 int num_threads;                      // Number of threads (main included) for every MPI process
 int num_iterations;                   // Number of convolution iterations
 int rank;                             // MPI process identifier
-int reqs_completed[SIM_REQS];     // Log of the completed mpi requests
+int reqs_completed[SIM_REQS];         // Log of the completed mpi requests
 MPI_Request requests[SIM_REQS];       // There are at most two "Isend" and one "Irecv" not completed at the same time per worker_thread, hence six per process
 pthread_mutex_t mutex_mpi;            // To call MPI routines in mutual exclusion (will be used only by top and bottom thread)
 struct io_thread_args io_args;        // Used by io, worker, and main threads to synchronize about grid read
@@ -62,7 +63,8 @@ int main(int argc, char** argv) {
   int provided;                       // MPI thread level supported
   int rc;                             // Return code used in error handling
   long_long time_start, time_stop;    // To measure execution time
-  FILE *fp_grid, *fp_kernel;          // I/O files for grid and kernel matrices
+  FILE *fp_grid = NULL;               // I/O files for grid and kernel matrices
+  FILE *fp_kernel = NULL;
 
   // Fetch from arguments how many convolution iterations do and the number of threads
   num_iterations = (argc > 1) ? atoi(argv[1]) : DEFAULT_ITERATIONS;
@@ -148,7 +150,7 @@ int main(int argc, char** argv) {
     old_grid = malloc(sizeof(float) * (grid_elems + pad_elems*2));
     pthread_mutex_init(&mutex_mpi, NULL);
 
-    if ((rc = pthread_create(&io_thread, NULL, grid_input_thread, NULL))) { 
+    if ((rc = pthread_create(&io_thread, NULL, grid_io_thread, NULL))) { 
       fprintf(stderr, "Error while creating pthread 'io_thread'; Return code: %d\n", rc);
       exit(-1);
     }
@@ -165,6 +167,14 @@ int main(int argc, char** argv) {
     pad_nrows = (kern_width - 1) / 2;
     pad_elems = grid_width * pad_nrows;
   }
+
+  // Checking if input is big enough for work division between threads and load balancing 
+  if(grid_width/(num_procs * num_threads + num_procs) < pad_nrows * 3) {
+    fprintf(stderr, "Threading is oversized compared to input matrix. Threads: %dx%d | Input number of rows: %d\n", num_procs, num_threads, grid_width);
+    exit(-1);
+  }
+
+  rbf_elems = pad_elems + grid_width * WORKER_FACTOR;                 // Rows before polling number of elements
 
   // Rank 0 get info about which processes must compute an additional row, other ranks get info only about themself
   get_process_additional_row(procs_info); 
@@ -238,7 +248,7 @@ int main(int argc, char** argv) {
   memset(&lb, 0, sizeof(struct load_balancer));
   lb.handler = &(struct thread_handler){0};
   lb.handler->tid = -1;
-  lb.handler->top = &handlers[num_threads/2-1];
+  lb.handler->top = &handlers[num_threads/2-1];                  // Connections with other threads
   lb.handler->bottom = &handlers[num_threads/2];
   handlers[num_threads/2-1].bottom = lb.handler;
   handlers[num_threads/2].top = lb.handler;
@@ -317,6 +327,10 @@ int main(int argc, char** argv) {
   }
 
   MPI_Finalize();
+  if(!rank) {
+    fclose(fp_kernel);
+    fclose(fp_grid);
+  }
   free(thread_measures);
   free(handlers);
   free(new_grid);
@@ -326,7 +340,7 @@ int main(int argc, char** argv) {
 }
 
 /* This is executed only by rank 0 */
-void* grid_input_thread(void* args) {
+void* grid_io_thread(void* args) {
   read_float_matrix(io_args.fp_grid, &old_grid[pad_elems], grid_elems);
 
   // Check if processes info are ready
@@ -357,6 +371,11 @@ void* worker_thread(void* args) {
   float *my_new_grid = new_grid;
   float *temp;                                      // Used only for grid swap
   int center_start;                                 // Center elements are completed one row at a time
+  uint8_t changes;                                  // To track if something changed during polling
+  const uint8_t mpi_needed[2] = {                   // If remote polling is necessary
+    (num_procs > 1) && rank && !handler->tid,
+    (num_procs > 1) && (rank < num_procs-1) && (handler->tid == num_threads-1)
+  };
 
   // PAPI setup
   int rc, event_set = PAPI_NULL;
@@ -389,12 +408,6 @@ void* worker_thread(void* args) {
   worker->rows_to_assert[BOTTOM] = handler->bot_rows_done;
   if(worker->neigh[TOP]) worker->rows_to_wait[TOP] = handler->top->bot_rows_done;
   if(worker->neigh[BOTTOM]) worker->rows_to_wait[BOTTOM] = handler->bottom->top_rows_done;
-
-  // If remote polling is necessary
-  const uint8_t mpi_needed[2] = {
-    (num_procs > 1) && rank && !handler->tid,
-    (num_procs > 1) && (rank < num_procs-1) && (handler->tid == num_threads-1)
-  };
 
   worker->mpi =  &(struct mpi_data){0};
   if(mpi_needed[TOP] || mpi_needed[BOTTOM]) {
@@ -472,14 +485,18 @@ void* worker_thread(void* args) {
     memset(completed, 0, sizeof(int) * 3);
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
+      changes = 0;
+
       if(!completed[TOP]) {
         if(mpi_needed[TOP]) remote_polling(TOP, iter, worker, measures);
         else thread_polling(TOP, iter, worker, measures);
+        changes |= completed[TOP];
       }
 
       if(!completed[BOTTOM]) {
         if(mpi_needed[BOTTOM]) remote_polling(BOTTOM, iter, worker, measures);
         else thread_polling(BOTTOM, iter, worker, measures);
+        changes |= completed[BOTTOM];
       }
 
       // Computing central rows one at a time if top and bottom rows are incomplete
@@ -490,14 +507,17 @@ void* worker_thread(void* args) {
           center_end = actual_end;
           completed[CENTER] = 1;
         } else {
-          center_end = center_start + grid_width * ROWS_BEFORE_POLLING;
+          center_end = center_start + rbf_elems;
           if(center_end > actual_end) center_end = actual_end;
         }
 
         conv_subgrid(my_old_grid, my_new_grid, center_start, center_end);
         if(center_end == actual_end) completed[CENTER] = 1;
-        else center_start += (grid_width * ROWS_BEFORE_POLLING);
+        else center_start += rbf_elems;
+        changes = 1;
       }
+
+      if(!changes) load_balancing(iter, 1, measures);
     }
 
     // Load balancing if this thread ended current iteration earlier
@@ -736,33 +756,39 @@ void remote_polling(enum POSITIONS pos, uint iter, struct worker_data* worker, l
   MPI_Status statuses[SIM_REQS];
   long_long *mpi_mutex_wait_time = meas[2];
 
-  if(!completed[CENTER] || !completed[!pos]) {
-    // If there is still other work to do, trylock and test
-    if(!reqs_completed[recv_offset] && !pthread_mutex_trylock(&mutex_mpi)){
-      MPI_Testsome(SIM_REQS, requests, &outcount, indexes, statuses);
+
+  // If there is still other work to do, trylock and test
+  if(!reqs_completed[recv_offset] && !pthread_mutex_trylock(&mutex_mpi)){
+    MPI_Testsome(SIM_REQS, requests, &outcount, indexes, statuses);
+    pthread_mutex_unlock(&mutex_mpi);
+    for(int i = 0; i < outcount; i++) reqs_completed[indexes[i]] = 1;
+  }
+  if(reqs_completed[recv_offset]) {
+    completed[pos] = 1;
+    reqs_completed[recv_offset] = 0;
+  }
+
+  // Else, do one row of the load balancer set of rows and wait
+  while(!completed[pos] && completed[!pos] && completed[CENTER]) {
+    if(iter >= lb.iter)
+      load_balancing(iter, 1, meas);
+    
+    if(!reqs_completed[recv_offset]) {
+      tmp = PAPI_get_real_usec();
+
+      // If there are no more load balancing work to do lock and wait, else try lock (continue if trylock fail)       
+      if(iter < lb.iter) pthread_mutex_lock(&mutex_mpi);
+      else if(pthread_mutex_trylock(&mutex_mpi)) continue;
+
+      *mpi_mutex_wait_time += PAPI_get_real_usec() - tmp;
+      MPI_Waitsome(SIM_REQS, requests, &outcount, indexes, statuses);
       pthread_mutex_unlock(&mutex_mpi);
       for(int i = 0; i < outcount; i++) reqs_completed[indexes[i]] = 1;
     }
+    
     if(reqs_completed[recv_offset]) {
       completed[pos] = 1;
       reqs_completed[recv_offset] = 0;
-    }
-  } else {
-    // Else, lock and wait
-    while(!completed[pos]) {
-      if(!reqs_completed[recv_offset]) {
-        tmp = PAPI_get_real_usec();
-        pthread_mutex_lock(&mutex_mpi);
-        *mpi_mutex_wait_time += PAPI_get_real_usec() - tmp;
-        MPI_Waitsome(SIM_REQS, requests, &outcount, indexes, statuses);
-        pthread_mutex_unlock(&mutex_mpi);
-        for(int i = 0; i < outcount; i++) reqs_completed[indexes[i]] = 1;
-      }
-      
-      if(reqs_completed[recv_offset]) {
-        completed[pos] = 1;
-        reqs_completed[recv_offset] = 0;
-      }
     }
   }
 

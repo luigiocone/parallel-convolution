@@ -46,6 +46,9 @@ uint rbf_elems;                       // Number of elements in Rows to compute B
 uint kern_elems;                      // Number of elements in whole kernel matrix
 uint grid_elems;                      // Number of elements in whole grid matrix
 uint proc_nrows;                      // Number of rows assigned to a process
+uint workers_nrows;                   // Number of rows to distribute to worker threads except the ones having mpi dependencies and load_balancer
+uint nrows_per_thread;                // Number of rows assigned to a worker having no MPI dependencies 
+uint bordering_thread_nrows;          // Number of rows assigned to a worker having MPI dependencies
 int num_procs;                        // Number of MPI processes in the communicator
 int num_threads;                      // Number of threads (main included) for every MPI process
 int num_iterations;                   // Number of convolution iterations
@@ -913,40 +916,81 @@ void get_process_additional_row(struct proc_info* procs_info) {
 /* 
  * Initialize the coordinates (starting and ending position) of the submatrix that should be computed by
  * a thread. If the number of threads is not a divider of the number of rows assigned to this process, 
- * distribute those additional rows in the load_balancer submatrix. 
+ * distribute those additional rows in the load_balancer submatrix. First execution of this procedure has 
+ * to be with the load balancer handler as argument. 
 */
 void initialize_thread_coordinates(struct thread_handler* handler) {
-  // Load balancer (tid == -1) it's placed in the center of the whole matrix
   int submatrix_id;
-  if(handler->tid >= 0) {
-    submatrix_id = handler->tid;
-    if(handler->tid >= num_threads/2) submatrix_id++; 
-  } else {
-    submatrix_id = num_threads/2;
-    lb.nrows = num_threads;
-    if (lb.nrows < pad_nrows * 2) lb.nrows += (pad_nrows * 2);
-  }
 
-  // Additional rows that will be assigned to load balancer
-  const int addrows = (proc_nrows - lb.nrows) % num_threads;
-  const int fixed_rows_per_thread = (proc_nrows - lb.nrows) / num_threads;
-  if(handler->tid < 0) { 
-    lb.nrows += addrows;
-    lb.size = lb.nrows * grid_width;
+  if(handler->tid != -1) {
+    // If this thread works in an area after the load balancing set of rows, compute a different offset
+    submatrix_id = handler->tid;
+    if(handler->tid >= num_threads/2) submatrix_id++;
+  } else {
+    // Load balancer (tid == -1) it's placed in the center of the submatrix
+    submatrix_id = num_threads/2;
+    
+    // Initial amount of rows assigned to load balancer
+    lb.nrows = num_threads;
+    if(lb.nrows < pad_nrows * 2) lb.nrows += (pad_nrows * 2);
+
+    // Initial amount of rows assigned to worker threads, remainder rows assigned to load balancer
+    nrows_per_thread = (proc_nrows - lb.nrows) / num_threads;
+    uint rem_rows = (proc_nrows - lb.nrows) % num_threads;
+    lb.nrows += rem_rows;
+
+    // Amount of rows for threads having mpi dependencies (center part divided by two) 
+    bordering_thread_nrows = pad_nrows*2 + (nrows_per_thread - pad_nrows*2) / 2;
+    uint8_t num_bordering_threads = 0;
+    if(num_procs > 1) {
+      num_bordering_threads++;
+      if(rank > 0 && rank < num_procs-1) 
+        num_bordering_threads++;
+    }
+
+    // Add to load balancer set of rows the work offload of bordering threads and recompute worker thread rows
+    lb.nrows += (nrows_per_thread - bordering_thread_nrows) * num_bordering_threads;
+    workers_nrows = proc_nrows - lb.nrows - num_bordering_threads * bordering_thread_nrows;
+    nrows_per_thread = workers_nrows / (num_threads - num_bordering_threads);
+    rem_rows = workers_nrows % (num_threads - num_bordering_threads);
+
+    workers_nrows -= rem_rows;
+    lb.nrows += rem_rows;
+    lb.size = lb.nrows * grid_width;    
   }
 
   // Initialize coordinates
-  const int fixed_size = fixed_rows_per_thread * grid_width;
-  int start_offset = submatrix_id * fixed_size;
-  int actual_size; 
-  if (handler->tid >= 0) {
-    actual_size = fixed_size;
-    if(submatrix_id > num_threads/2) 
-      start_offset = start_offset - fixed_size + lb.size;
-  } else {
-    actual_size = lb.size;
-  }
+  const uint thread_elems = nrows_per_thread * grid_width;
+  const uint bordering_thread_elems = bordering_thread_nrows * grid_width;
+  uint actual_size;
+  uint offset = pad_elems;
 
-  handler->start = pad_elems + start_offset;
-  handler->end = handler->start + actual_size;
+  if(!handler->tid && rank) {
+    // Upper thread has mpi dependency
+    actual_size = bordering_thread_elems;
+    handler->start = offset;
+    handler->end = handler->start + actual_size;
+  } else if (num_procs > 1 && handler->tid == num_threads-1 && rank < num_procs-1) {
+    // Lower thread has mpi dependency
+    actual_size = bordering_thread_elems;
+    handler->end = (proc_nrows * grid_width) + offset;
+    handler->start = handler->end - actual_size;
+  } else {
+    if(rank) {
+      // If upper thread have mpi dependency compute a different offset
+      offset += bordering_thread_elems;
+      handler->start = submatrix_id - 1;
+    } else handler->start = submatrix_id;
+    
+    handler->start = handler->start * thread_elems + offset;
+    if (handler->tid == -1) {
+      actual_size = lb.size;
+    } else {
+      actual_size = thread_elems;
+      // If this thread works in an area after the load balancing set of rows, compute a different offset
+      if(submatrix_id > num_threads/2) 
+        handler->start = handler->start - thread_elems + lb.size;
+    }
+    handler->end = handler->start + actual_size;
+  }
 }

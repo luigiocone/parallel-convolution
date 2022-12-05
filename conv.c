@@ -11,6 +11,7 @@
 #include <mpi.h>
 #include <pthread.h>
 #include <immintrin.h>
+#include <unistd.h>
 #include "./include/convutils.h"
 
 #define DEFAULT_ITERATIONS 1
@@ -49,6 +50,7 @@ uint proc_nrows;                      // Number of rows assigned to a process
 uint workers_nrows;                   // Number of rows to distribute to worker threads except the ones having mpi dependencies and load_balancer
 uint nrows_per_thread;                // Number of rows assigned to a worker having no MPI dependencies 
 uint bordering_thread_nrows;          // Number of rows assigned to a worker having MPI dependencies
+uint8_t num_bordering_threads;        // Number of threads having MPI dependencies
 int num_procs;                        // Number of MPI processes in the communicator
 int num_threads;                      // Number of threads (main included) for every MPI process
 int num_iterations;                   // Number of convolution iterations
@@ -60,7 +62,6 @@ struct io_thread_args io_args;        // Used by io, worker, and main threads to
 struct load_balancer lb;              // Structure containing all synchronization variables used during load balancing 
 long_long** thread_measures;          // To collect thread measures
 __m128i last_mask;                    // Used by PSIMD instructions to discard last elements in contiguous load
-
 
 int main(int argc, char** argv) {
   int provided;                       // MPI thread level supported
@@ -941,8 +942,8 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
 
     // Amount of rows for threads having mpi dependencies (center part divided by two) 
     bordering_thread_nrows = pad_nrows*2 + (nrows_per_thread - pad_nrows*2) / 2;
-    uint8_t num_bordering_threads = 0;
-    if(num_procs > 1) {
+    num_bordering_threads = 0;
+    if(num_procs > 1 && num_threads > 2) {
       num_bordering_threads++;
       if(rank > 0 && rank < num_procs-1) 
         num_bordering_threads++;
@@ -956,12 +957,12 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
 
     workers_nrows -= rem_rows;
     lb.nrows += rem_rows;
-    lb.size = lb.nrows * grid_width;    
+    lb.size = lb.nrows * grid_width;
   }
 
   // Initialize coordinates
   const uint thread_elems = nrows_per_thread * grid_width;
-  const uint bordering_thread_elems = bordering_thread_nrows * grid_width;
+  const uint bordering_thread_elems = (!num_bordering_threads) ? thread_elems : bordering_thread_nrows * grid_width;
   uint actual_size;
   uint offset = pad_elems;
 

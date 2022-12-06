@@ -882,8 +882,8 @@ void load_balancing_custom(int iter, uint* work_nrows, uint8_t check_for_more_wo
     start = lb.curr_start;
     if(lb.curr_start <= (lb.handler->end - pad_elems - work_elems)) 
       lb.curr_start += work_elems;
-    else
-      lb.curr_start = lb.handler->end;
+    else if(lb.curr_start < (lb.handler->end - pad_elems))
+      lb.curr_start = lb.handler->end - pad_elems;
     end = lb.curr_start;
   }
   pthread_mutex_unlock(&lb.mutex);

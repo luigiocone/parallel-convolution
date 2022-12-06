@@ -20,7 +20,7 @@
 #define KERNEL_FILE_PATH "./io-files/kernels/gblur.bin"
 #define VEC_SIZE 4
 #define MEAN_VALUE 0
-#define DEBUG 0                       // True to save result in textual and binary mode
+#define DEBUG 1                       // True to save result in textual and binary mode
 #define WORKER_FACTOR 1               // Used to calc how many rows must be computed before polling the neighbours
 #define REQS_OFFSET(POS) ((POS) * SIM_REQS / 2)
 #define RECV_OFFSET(POS) (REQS_OFFSET(POS) + 2)
@@ -30,6 +30,7 @@ void *grid_io_thread(void*);
 void thread_polling(enum POSITIONS, uint, struct worker_data*, long_long**);
 void remote_polling(enum POSITIONS, uint, struct worker_data*, long_long**);
 void load_balancing(int, uint8_t, long_long**);
+void load_balancing_custom(uint, uint*, long_long**);
 void conv_subgrid(float*, float*, int, int);
 void get_process_additional_row(struct proc_info*);
 void initialize_thread_coordinates(struct thread_handler*);
@@ -49,7 +50,8 @@ uint grid_elems;                      // Number of elements in whole grid matrix
 uint proc_nrows;                      // Number of rows assigned to a process
 uint workers_nrows;                   // Number of rows to distribute to worker threads except the ones having mpi dependencies and load_balancer
 uint nrows_per_thread;                // Number of rows assigned to a worker having no MPI dependencies 
-uint bordering_thread_nrows;          // Number of rows assigned to a worker having MPI dependencies
+uint bordering_thread_nrows;          // Number of rows assigned to a worker having MPI dependencies (those threads are offloaded)
+uint max_lb_amount;                   // Number of additional rows that a woker with MPI dependencies should do in lb set of rows 
 uint8_t num_bordering_threads;        // Number of threads having MPI dependencies
 int num_procs;                        // Number of MPI processes in the communicator
 int num_threads;                      // Number of threads (main included) for every MPI process
@@ -172,7 +174,9 @@ int main(int argc, char** argv) {
     pad_elems = grid_width * pad_nrows;
   }
 
+  pthread_mutex_lock(&mutex_mpi);
   MPI_Barrier(MPI_COMM_WORLD);
+  pthread_mutex_unlock(&mutex_mpi);
 
   // Checking if input is big enough for work division between threads and load balancing 
   if(grid_width/(num_procs * num_threads + num_procs) < pad_nrows * 3) {
@@ -384,6 +388,7 @@ void* worker_thread(void* args) {
   float *my_new_grid = new_grid;
   float *temp;                                      // Used only for grid swap
   int center_start;                                 // Center elements are completed one row at a time
+  uint tot_rows_computed;                           // How many rows of load balancer set of rows have been computed by this thread      
   uint8_t changes;                                  // To track if something changed during polling
   const uint8_t mpi_needed[2] = {                   // If remote polling is necessary
     (num_procs > 1) && rank && !handler->tid,
@@ -495,6 +500,7 @@ void* worker_thread(void* args) {
     my_old_grid = my_new_grid;
     my_new_grid = temp;
     center_start = handler->start + pad_elems;
+    tot_rows_computed = 0;
     memset(completed, 0, sizeof(int) * 3);
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
@@ -512,21 +518,42 @@ void* worker_thread(void* args) {
         changes |= completed[BOTTOM];
       }
 
-      // Computing central rows one at a time if top and bottom rows are incomplete
+      // Computing a bunch of central rows if top and bottom rows are incomplete
       if(!completed[CENTER]) {
-        uint center_end;
-        uint actual_end = handler->end - pad_elems;
-        if (completed[TOP] && completed[BOTTOM]) {
-          center_end = actual_end;
-          completed[CENTER] = 1;
+        if(mpi_needed[TOP] || mpi_needed[BOTTOM]) {
+          if(center_start != handler->end - pad_elems) {
+            // Threads having MPI dependencies have a small amount of CENTER rows
+            conv_subgrid(my_old_grid, my_new_grid, center_start, handler->end - pad_elems);
+            center_start = handler->end - pad_elems;
+          } else if (iter < lb.iter) { 
+            // Load balancer set of rows have been already completed (this thread is late)
+            completed[CENTER] = 1;
+            continue;
+          } else {
+            // Compute a specic amount of load balancer rows
+            uint rows_to_compute = rbf_elems/grid_width;
+            load_balancing_custom(iter, &rows_to_compute, measures);          
+            tot_rows_computed += rows_to_compute;
+            if(!rows_to_compute || tot_rows_computed >= max_lb_amount || (completed[TOP] && completed[BOTTOM])) 
+              completed[CENTER] = 1;
+            continue;
+          }
         } else {
-          center_end = center_start + rbf_elems;
-          if(center_end > actual_end) center_end = actual_end;
-        }
+          // Threads having no MPI dependencies are in this branch
+          uint center_end;
+          uint actual_end = handler->end - pad_elems;
+          if (completed[TOP] && completed[BOTTOM]) {
+            center_end = actual_end;
+            completed[CENTER] = 1;
+          } else {
+            center_end = center_start + rbf_elems;
+            if(center_end > actual_end) center_end = actual_end;
+          }
 
-        conv_subgrid(my_old_grid, my_new_grid, center_start, center_end);
-        if(center_end == actual_end) completed[CENTER] = 1;
-        else center_start += rbf_elems;
+          conv_subgrid(my_old_grid, my_new_grid, center_start, center_end);
+          if(center_end == actual_end) completed[CENTER] = 1;
+          else center_start += rbf_elems;
+        }
         changes = 1;
       }
 
@@ -667,6 +694,64 @@ void load_balancing(int iter, uint8_t single_work, long_long** meas){
     pthread_mutex_unlock(&lb.mutex);
     if(single_work) return;
   }
+}
+
+/* 
+ * Compute a custom number of rows of a subset of load balancing rows (the ones having no dependencies). If 
+ * the portion with no dependencies is completed, then variable "work_nrows" will assume value 0. 
+*/
+void load_balancing_custom(uint iter, uint* work_nrows, long_long** meas){
+  uint work_elems = (*work_nrows) * grid_width;
+  long_long tmp, *lb_mutex_wait_time = meas[3];
+
+  float *my_new_grid, *my_old_grid;
+  if(iter % 2) {
+    my_new_grid = old_grid;
+    my_old_grid = new_grid;
+  } else {
+    my_new_grid = new_grid;
+    my_old_grid = old_grid;
+  }
+
+  // Reserve a number of rows 
+  uint start = 0, end = 0;
+  tmp = PAPI_get_real_usec();
+  pthread_mutex_lock(&lb.mutex);
+  lb_mutex_wait_time += PAPI_get_real_usec() - tmp;
+  if(iter == lb.iter && (lb.curr_start >= lb.handler->start + pad_elems)) {
+    start = lb.curr_start;
+    if(lb.curr_start <= (lb.handler->end - pad_elems - work_elems)) 
+      lb.curr_start += work_elems;
+    else if(lb.curr_start < (lb.handler->end - pad_elems))
+      lb.curr_start = lb.handler->end - pad_elems;
+    end = lb.curr_start;
+  }
+  pthread_mutex_unlock(&lb.mutex);
+
+  // If all middle rows have been already computed 
+  if(!start || start >= end) {
+    *work_nrows = 0;
+    return;
+  }
+
+  // Compute convolution and signal rows completion
+  conv_subgrid(my_old_grid, my_new_grid, start, end);
+  if(end-start != work_elems) *work_nrows = (end-start)/grid_width;
+
+  tmp = PAPI_get_real_usec();
+  pthread_mutex_lock(&lb.mutex);
+  lb_mutex_wait_time += PAPI_get_real_usec() - tmp;
+  lb.rows_completed += (*work_nrows);                     // Track the already computed row
+  if(lb.rows_completed == lb.nrows) {                     // All shared works have been completed
+    lb.rows_completed = 0;
+    lb.curr_start = lb.handler->start + pad_elems;
+    lb.iter++;
+    pthread_cond_broadcast(&lb.iter_completed);
+  }
+  pthread_mutex_unlock(&lb.mutex);
+
+  // If all middle rows have been computed   
+  if(end == lb.handler->end - pad_elems) *work_nrows = 0;
 }
 
 /* Test shared memory dependencies, if possible convolute bordering rows and signal their completion */
@@ -981,8 +1066,8 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
     uint rem_rows = (proc_nrows - lb.nrows) % num_threads;
     lb.nrows += rem_rows;
 
-    // Amount of rows for threads having mpi dependencies (center part divided by two) 
-    bordering_thread_nrows = pad_nrows*2 + (nrows_per_thread - pad_nrows*2) / 2;
+    // Amount of rows for threads having mpi dependencies (minimum is: pad_nrows*2 + 1)
+    bordering_thread_nrows = pad_nrows * 3;
     num_bordering_threads = 0;
     if(num_procs > 1 && num_threads > 2) {
       num_bordering_threads++;
@@ -991,6 +1076,7 @@ void initialize_thread_coordinates(struct thread_handler* handler) {
     }
 
     // Add to load balancer set of rows the work offload of bordering threads and recompute worker thread rows
+    max_lb_amount = nrows_per_thread - bordering_thread_nrows;
     lb.nrows += (nrows_per_thread - bordering_thread_nrows) * num_bordering_threads;
     workers_nrows = proc_nrows - lb.nrows - num_bordering_threads * bordering_thread_nrows;
     nrows_per_thread = workers_nrows / (num_threads - num_bordering_threads);

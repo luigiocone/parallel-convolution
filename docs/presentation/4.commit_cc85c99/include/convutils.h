@@ -1,6 +1,16 @@
 #ifndef CONVUTILS_H
 #define CONVUTILS_H
 
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <papi.h>
+#include <mpi.h>
+#include <pthread.h>
+#include <unistd.h>
+
 #define SIM_RECV 2                                // Per-process max number of simultaneous MPI receive requests (from TOP and BOTTOM)
 #define SIM_REQS (SIM_RECV * 3)                   // Per-process max number of simultaneous MPI requests
 #define DEBUG_EXP_CHARS 13                        // Format "%+e" has this num of chars (e.g. -9.075626e+20)

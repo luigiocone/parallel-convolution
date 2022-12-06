@@ -1,6 +1,16 @@
 #ifndef CONVUTILS_H
 #define CONVUTILS_H
 
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <papi.h>
+#include <mpi.h>
+#include <pthread.h>
+#include <unistd.h>
+
 #define SIM_RECV 2                                // Per-process max number of simultaneous MPI receive requests (from TOP and BOTTOM)
 #define SIM_REQS (SIM_RECV * 3)                   // Per-process max number of simultaneous MPI requests
 #define DEBUG_EXP_CHARS 13                        // Format "%+e" has this num of chars (e.g. -9.075626e+20)
@@ -35,8 +45,8 @@ struct thread_handler {               // Used by active threads to handle a matr
 
 struct proc_info {                    // Info about data scattering and gathering
   uint8_t has_additional_row;         // If this process must compute an additional row
-  uint sstart, ssize;                 // Used for initial input scattering (multiple MPI_Isend)
-  uint gstart, gsize;                 // Used for final result gathering (multiple MPI_Irecv)
+  int sstart, ssize;                 // Used for initial input scattering (multiple MPI_Isend)
+  int gstart, gsize;                 // Used for final result gathering (multiple MPI_Irecv)
 };
 
 struct io_thread_args {

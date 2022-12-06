@@ -1,11 +1,3 @@
-#define _GNU_SOURCE
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <papi.h>
-#include <mpi.h>
-#include <pthread.h>
-#include <unistd.h>
 #include "convutils.h"
 
 /* Set thread affinity. If there are more threads than cores, no affinity will be set */

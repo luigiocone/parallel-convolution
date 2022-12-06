@@ -20,7 +20,7 @@
 #define KERNEL_FILE_PATH "./io-files/kernels/gblur.bin"
 #define VEC_SIZE 4
 #define MEAN_VALUE 0
-#define DEBUG 1                       // True to save result in textual and binary mode
+#define DEBUG 0                       // True to save result in textual and binary mode
 #define WORKER_FACTOR 1               // Used to calc how many rows must be computed before polling the neighbours
 #define REQS_OFFSET(POS) ((POS) * SIM_REQS / 2)
 #define RECV_OFFSET(POS) (REQS_OFFSET(POS) + 2)
@@ -172,6 +172,8 @@ int main(int argc, char** argv) {
     pad_elems = grid_width * pad_nrows;
   }
 
+  MPI_Barrier(MPI_COMM_WORLD);
+
   // Checking if input is big enough for work division between threads and load balancing 
   if(grid_width/(num_procs * num_threads + num_procs) < pad_nrows * 3) {
     fprintf(stderr, "Threading is oversized compared to input matrix. Threads: %dx%d | Input number of rows: %d\n", num_procs, num_threads, grid_width);
@@ -203,7 +205,7 @@ int main(int argc, char** argv) {
       for(int i = 1; i < num_procs; i++) {
         io_args.procs_info[i].sstart = (min_nrows * i + offset) * grid_width;
         io_args.procs_info[i].ssize = (min_nrows + pad_nrows*2 + io_args.procs_info[i].has_additional_row) * grid_width;
-        if(i == num_procs-1) io_args.procs_info[i].ssize -= grid_width * pad_nrows;
+        if(i == num_procs-1) io_args.procs_info[i].ssize -= pad_elems;
         offset += io_args.procs_info[i].has_additional_row;
       }
       pthread_mutex_lock(&(io_args.mutex));
@@ -213,15 +215,15 @@ int main(int argc, char** argv) {
       
       // Info about result gathering from previous scattering data. Pads are excluded
       for(int p = 1; p < num_procs; p++) {
-        io_args.procs_info[p].gstart = io_args.procs_info[p].sstart + pad_nrows * grid_width;
-        io_args.procs_info[p].gsize = io_args.procs_info[p].ssize - pad_nrows * 2 * grid_width;
-        if(p == num_procs-1) io_args.procs_info[p].gsize += grid_width * pad_nrows;
+        io_args.procs_info[p].gstart = io_args.procs_info[p].sstart + pad_elems;
+        io_args.procs_info[p].gsize = io_args.procs_info[p].ssize - pad_elems*2;
+        if(p == num_procs-1) io_args.procs_info[p].gsize += pad_elems;
       }
     }
   } else {
     // Receive grid data
     uint recv_size = proc_elems + pad_elems * 2;
-    if(rank == num_procs-1) recv_size -= grid_width;
+    if(rank == num_procs-1) recv_size -= pad_elems;
     MPI_Irecv(old_grid, recv_size, MPI_FLOAT, 0, rank, MPI_COMM_WORLD, &(io_args.requests[1]));
   }
 
@@ -237,6 +239,13 @@ int main(int argc, char** argv) {
 
   for(int i = 0; i < SIM_REQS; i++) requests[i] = MPI_REQUEST_NULL;
   memset(reqs_completed, 0, sizeof(int) * SIM_REQS);
+  
+  // Computation of "last_mask"
+  uint32_t rem = kern_width % VEC_SIZE;
+  uint32_t to_load[VEC_SIZE];
+  memset(to_load, 0, VEC_SIZE * sizeof(uint32_t));
+  for(int i = 0; i < rem; i++) to_load[i] = UINT32_MAX;        // UINT32_MAX = -1
+  last_mask = _mm_loadu_si128((__m128i*) to_load);
 
   // PThreads arguments initialization 
   struct thread_handler* handlers = calloc(num_threads, sizeof(struct thread_handler));
@@ -833,6 +842,8 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
   int kern_index;                          // Current position in kernel matrix
   int kern_end;                            // Describes when it's time to change row
   int iterations;                          // How many iterations are necessary to calc a single value of "new_grid"
+  __m128 vec_grid, vec_kern, vec_temp;     // 4xF32 vector for grid and kernel (plus a temp vector)
+  __m128 vec_mxds, vec_rslt;               // 4xF32 vector of matrix dot sum and result, will be reduced at the end
 
   for(int i = start_index; i < end_index; i++) {
     // Setting indexes for current element
@@ -857,16 +868,46 @@ void conv_subgrid(float *sub_grid, float *new_grid, int start_index, int end_ind
     }
 
     // Convolution
-    result = 0; matrix_dot_sum = 0; offset = 0;
-    for (int iter=0; iter < iterations; iter++) {
-      result += sub_grid[grid_index+offset] * kernel[kern_index+offset];
-      matrix_dot_sum += sub_grid[grid_index+offset] * sub_grid[grid_index+offset];
-      if (offset != kern_end-1) 
-        offset++;
-      else { 
+    if(iterations == kern_elems) {
+      // Packed SIMD instructions for center elements
+      vec_rslt = _mm_setzero_ps();
+      vec_mxds = _mm_setzero_ps();
+      for(int kern_row = 0; kern_row < kern_width; kern_row++) {       // For every kernel row
+        for(offset = 0; offset < kern_width; offset += VEC_SIZE) {     // For every ps_vector in a kernel (and grid) row
+          if(offset + VEC_SIZE < kern_width) {                         // If this isn't the final iteration of this loop, load a full vector
+            vec_grid = _mm_loadu_ps(&sub_grid[grid_index+offset]);
+            vec_kern = _mm_loadu_ps(&kernel[kern_index+offset]);
+          } else {
+            vec_grid = _mm_maskload_ps(&sub_grid[grid_index+offset], last_mask);
+            vec_kern = _mm_maskload_ps(&kernel[kern_index+offset], last_mask);
+          }
+          vec_temp = _mm_mul_ps(vec_grid, vec_kern);
+          vec_rslt = _mm_add_ps(vec_rslt, vec_temp);
+          vec_temp = _mm_mul_ps(vec_grid, vec_grid);
+          vec_mxds = _mm_add_ps(vec_mxds, vec_temp);
+        }
         grid_index += grid_width;
         kern_index += kern_width;
-        offset = 0;
+      }
+      vec_rslt = _mm_hadd_ps(vec_rslt, vec_rslt);  // Sum reduction with two horizontal sum
+      vec_rslt = _mm_hadd_ps(vec_rslt, vec_rslt);
+      result = vec_rslt[0];
+      vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);  // Sum reduction with two horizontal sum
+      vec_mxds = _mm_hadd_ps(vec_mxds, vec_mxds);
+      matrix_dot_sum = vec_mxds[0];
+    } else {
+      // Standard convolution
+      result = 0; matrix_dot_sum = 0; offset = 0;
+      for (int iter=0; iter < iterations; iter++) {
+        result += sub_grid[grid_index+offset] * kernel[kern_index+offset];
+        matrix_dot_sum += sub_grid[grid_index+offset] * sub_grid[grid_index+offset];
+        if (offset != kern_end-1) 
+          offset++;
+        else { 
+          grid_index += grid_width;
+          kern_index += kern_width;
+          offset = 0;
+        }
       }
     }
 

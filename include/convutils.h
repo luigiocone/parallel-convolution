@@ -20,7 +20,7 @@
 extern uint grid_elems, pad_elems, grid_width; 
 extern int num_threads;
 
-enum POSITIONS {                      // Submatrix positions of interests for dependencies handling
+enum POSITION {                       // Submatrix positions of interests for dependencies handling
     TOP = 0,
     BOTTOM = 1,
     CENTER = 2

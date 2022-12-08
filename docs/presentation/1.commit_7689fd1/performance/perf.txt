@@ -1,0 +1,45 @@
+[ocone@compute-0-0 convolution]$ mpirun -np 1 ./conv 200
+[0] Elapsed time: 8761858 us | Total L2 cache misses: 31717237
+[ocone@compute-0-0 convolution]$ mpirun -np 1 ./conv 200
+[0] Elapsed time: 8039223 us | Total L2 cache misses: 31792710
+[ocone@compute-0-0 convolution]$ mpirun -np 1 ./conv 200
+[0] Elapsed time: 8070761 us | Total L2 cache misses: 31440827
+
+
+
+[ocone@compute-0-0 convolution]$ mpirun -np 2 ./conv 200
+[0] Elapsed time: 4434600 us | Total L2 cache misses: 54707719
+[ocone@compute-0-0 convolution]$ mpirun -np 2 ./conv 200
+[0] Elapsed time: 4584384 us | Total L2 cache misses: 54807821
+
+[ocone@compute-0-0 convolution]$ mpirun -np 4 ./conv 200
+[0] Elapsed time: 2630723 us | Total L2 cache misses: 105671060
+[ocone@compute-0-0 convolution]$ mpirun -np 4 ./conv 200
+[0] Elapsed time: 2653877 us | Total L2 cache misses: 105977477
+
+[ocone@compute-0-0 convolution]$ mpirun -np 8 ./conv 200
+[0] Elapsed time: 2257792 us | Total L2 cache misses: 205459457
+[ocone@compute-0-0 convolution]$ mpirun -np 8 ./conv 200
+[0] Elapsed time: 2270451 us | Total L2 cache misses: 206005032
+
+
+[ocone@compute-0-0 convolution]$ mpirun -np 16 ./conv 200
+[0] Elapsed time: 3115234 us | Total L2 cache misses: 403547383
+[ocone@compute-0-0 convolution]$ mpirun -np 16 ./conv 200
+[0] Elapsed time: 3109445 us | Total L2 cache misses: 403866891
+[ocone@compute-0-0 convolution]$ 
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 32 -machinefile mf ./conv 200
+[0] Elapsed time: 7471620 us | Total L2 cache misses: 3647440
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 32 -machinefile mf ./conv 200
+[0] Elapsed time: 7463415 us | Total L2 cache misses: 3690089
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 64 -machinefile mf ./conv 200
+[0] Elapsed time: 13357627 us | Total L2 cache misses: 4190016
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 64 -machinefile mf ./conv 200
+[0] Elapsed time: 13337570 us | Total L2 cache misses: 4422202
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 64 -machinefile mf ./conv 200
+[0] Elapsed time: 37465585 us | Total L2 cache misses: 79165019

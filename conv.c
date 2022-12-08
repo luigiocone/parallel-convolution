@@ -27,9 +27,9 @@
 
 void *worker_thread(void*);
 void *grid_io_thread(void*);
-void thread_polling(enum POSITIONS, uint, struct worker_data*, long_long**);
-void remote_polling(enum POSITIONS, uint, struct worker_data*, long_long**);
-void load_balancing(int, uint8_t, long_long**);
+void thread_polling(enum POSITION, uint, struct worker_data*, long_long**);
+void remote_polling(enum POSITION, uint, struct worker_data*, long_long**);
+void load_balancing(int, uint8_t, struct worker_data* worker, long_long**);
 void load_balancing_custom(uint, uint*, long_long**);
 void conv_subgrid(float*, float*, int, int);
 void get_process_additional_row(struct proc_info*);
@@ -174,9 +174,12 @@ int main(int argc, char** argv) {
     pad_elems = grid_width * pad_nrows;
   }
 
-  pthread_mutex_lock(&mutex_mpi);
-  MPI_Barrier(MPI_COMM_WORLD);
-  pthread_mutex_unlock(&mutex_mpi);
+  if(!rank && num_procs > 1) {
+    MPI_Status statuses[num_procs-1];
+    pthread_mutex_lock(&mutex_mpi);
+    MPI_Waitall(num_procs-1, info_reqs, statuses);
+    pthread_mutex_unlock(&mutex_mpi);
+  }
 
   // Checking if input is big enough for work division between threads and load balancing 
   if(grid_width/(num_procs * num_threads + num_procs) < pad_nrows * 3) {
@@ -438,7 +441,7 @@ void* worker_thread(void* args) {
       worker->mpi->recv_position = handler->end;
       worker->mpi->neighbour = rank + 1;
     }
-  }
+  } else worker->mpi = NULL;
 
   // Complete kernel receive and/or compute "sum(dot(kernel, kernel))"
   if(!handler->tid) {
@@ -491,7 +494,7 @@ void* worker_thread(void* args) {
 
   // Complete the first convolution iteration by computing central elements
   conv_subgrid(my_old_grid, my_new_grid, (handler->start + pad_elems), (handler->end - pad_elems));
-  if(!lb.iter) load_balancing(0, 0, measures);
+  if(!lb.iter) load_balancing(0, 0, NULL, measures);
 
   // Second or higher convolution iterations
   int* completed = worker->completed;
@@ -501,7 +504,6 @@ void* worker_thread(void* args) {
     my_new_grid = temp;
     center_start = handler->start + pad_elems;
     tot_rows_computed = 0;
-    memset(completed, 0, sizeof(int) * 3);
 
     while(!completed[TOP] || !completed[BOTTOM] || !completed[CENTER]) {
       changes = 0;
@@ -557,11 +559,14 @@ void* worker_thread(void* args) {
         changes = 1;
       }
 
-      if(!changes) load_balancing(iter, 1, measures);
+      if(!changes) load_balancing(iter, 1, NULL, measures);
     }
 
+    // During load balancing
+    memset(completed, 0, sizeof(int) * 3);
+
     // Load balancing if this thread ended current iteration earlier
-    if(iter >= lb.iter) load_balancing(iter, 0, measures);
+    if(iter >= lb.iter) load_balancing(iter, 0, worker, measures);
   }
 
   // Retrieving execution info
@@ -582,7 +587,7 @@ void* worker_thread(void* args) {
 }
 
 /* Threads that ended their iteration earlier will compute a shared portion of the matrix */
-void load_balancing(int iter, uint8_t single_work, long_long** meas){
+void load_balancing(int iter, uint8_t single_work, struct worker_data* worker, long_long** meas){
   const uint8_t iter_even = (!iter) ? 1 : !(iter % 2);               // If current iteration is even or odd
   uint start = 0, end = 0;
   long_long t;
@@ -598,8 +603,23 @@ void load_balancing(int iter, uint8_t single_work, long_long** meas){
     my_old_grid = old_grid;
   }
 
+  // If there are MPI dependencies
+  enum POSITION pos = 0;
+  int count = -1;
+  if(!single_work && worker != NULL && worker->mpi != NULL) {
+    count = 0;
+    pos = (!worker->mpi->recv_position) ? TOP: BOTTOM;
+  }
+
   // Compute a row of the load_balancer shared work 
   while(iter >= lb.iter) {
+    
+    // MPI messages could be ready while computing load balancing set of rows
+    if(!count && !worker->completed[pos]) {
+      count = pad_nrows+1;
+      remote_polling(pos, iter+1, worker, meas);
+    } else count--;
+
     start = 0;
     t = PAPI_get_real_usec();
     pthread_mutex_lock(&lb.mutex);
@@ -755,7 +775,7 @@ void load_balancing_custom(uint iter, uint* work_nrows, long_long** meas){
 }
 
 /* Test shared memory dependencies, if possible convolute bordering rows and signal their completion */
-void thread_polling(enum POSITIONS pos, uint iter, struct worker_data* worker, long_long** meas) {
+void thread_polling(enum POSITION pos, uint iter, struct worker_data* worker, long_long** meas) {
   const uint8_t iter_even = !(iter % 2);                   // If current iteration is even or odd
   uint8_t* rtw = &worker->rows_to_wait[pos][iter_even];    // pos: TOP or BOTTOM; iter_even: previous iteration
   uint8_t* rta = &worker->rows_to_assert[pos][!iter_even]; // pos: TOP or BOTTOM; !iter_even: current iteration
@@ -792,7 +812,7 @@ void thread_polling(enum POSITIONS pos, uint iter, struct worker_data* worker, l
     while(!completed[pos]) {
       if(iter >= lb.iter){
         // If neighbour part still not ready, compute a single row of load balancing set of rows
-        load_balancing(iter, 1, meas);
+        load_balancing(iter, 1, NULL, meas);
         tmp = PAPI_get_real_usec();
         pthread_mutex_lock(&(neighbour->mutex));
         *handler_mutex_wait_time += PAPI_get_real_usec() - tmp;
@@ -843,7 +863,7 @@ void thread_polling(enum POSITIONS pos, uint iter, struct worker_data* worker, l
 }
 
 /* Test distributed memory dependencies, if possible convolute bordering rows and exchange them with MPI */
-void remote_polling(enum POSITIONS pos, uint iter, struct worker_data* worker, long_long** meas) {
+void remote_polling(enum POSITION pos, uint iter, struct worker_data* worker, long_long** meas) {
   const uint8_t iter_even = !(iter % 2);                   // If current iteration is even or odd
   const uint8_t recv_offset = RECV_OFFSET(pos);
   int* completed = worker->completed;
@@ -869,7 +889,7 @@ void remote_polling(enum POSITIONS pos, uint iter, struct worker_data* worker, l
   // Else, do one row of the load balancer set of rows and wait
   while(!completed[pos] && completed[!pos] && completed[CENTER]) {
     if(iter >= lb.iter)
-      load_balancing(iter, 1, meas);
+      load_balancing(iter, 1, NULL, meas);
     
     if(!reqs_completed[recv_offset]) {
       tmp = PAPI_get_real_usec();

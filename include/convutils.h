@@ -35,7 +35,7 @@ enum DATA {                              // Data that must be prepared before st
 struct thread_handler {                  // Used by active threads to handle a matrix portion and to synchronize with neighbours
   int tid;                               // Custom thread ID, not the one returned by "pthread_self()"
   uint start, end;                       // Matrix area of ​​interest for this thread
-  uint8_t rows_done[2][2];               // Flags for TOP/BOTTOM bordering rows and for curr/next iteration
+  uint8_t pad_done[2][2];                // Flags for TOP/BOTTOM bordering rows and for curr/next iteration
   struct thread_handler* neighbour[2];   // To exchange information about pads with neighbour threads
   pthread_mutex_t mutex;                 // Mutex to access this handler
   pthread_cond_t pad_ready;              // Thread will wait if neighbour's top and bottom rows (pads) aren't ready

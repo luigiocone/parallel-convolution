@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# = 0 ]; then
-    mpirun -np 1 ./conv 200 2
+    mpirun -np 1 ./conv 1 2
     exit $?
 fi
 

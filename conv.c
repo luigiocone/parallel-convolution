@@ -441,8 +441,8 @@ void* worker_thread(void* args) {
   conv_subgrid(my_old_grid, my_new_grid, (handler->end - pad_elems), handler->end);
 
   pthread_mutex_lock(&(handler->mutex));
-  handler->rows_done[TOP][0] = 1;
-  handler->rows_done[BOTTOM][0] = 1;
+  handler->pad_done[TOP][0] = 1;
+  handler->pad_done[BOTTOM][0] = 1;
   pthread_cond_broadcast(&(handler->pad_ready));
   pthread_mutex_unlock(&(handler->mutex));
 
@@ -607,8 +607,8 @@ void load_balancing(int iter, uint8_t single_work, struct worker_data* worker){
     uint* pad_counter;
     if(lb.handler->neighbour[pos] != NULL) {
       neigh_handler = lb.handler->neighbour[pos];
-      rows_to_wait = lb.handler->neighbour[pos]->rows_done[!pos];
-      rows_to_assert = lb.handler->rows_done[pos];
+      rows_to_wait = lb.handler->neighbour[pos]->pad_done[!pos];
+      rows_to_assert = lb.handler->pad_done[pos];
       pad_counter = &lb.nrwos_pad_completed[pos];
     }
 
@@ -707,8 +707,8 @@ void thread_polling(enum POSITION pos, uint iter, struct worker_data* worker) {
   uint8_t *rtw, *rta;                                               // Rows to wait and to assert
   struct thread_handler* neighbour = worker->self->neighbour[pos];
   if(neighbour)
-    rtw = &neighbour->rows_done[!pos][iter_even];            // pos: TOP or BOTTOM; iter_even: previous iteration
-  rta = &worker->self->rows_done[pos][!iter_even];           // pos: TOP or BOTTOM; !iter_even: current iteration
+    rtw = &neighbour->pad_done[!pos][iter_even];            // pos: TOP or BOTTOM; iter_even: previous iteration
+  rta = &worker->self->pad_done[pos][!iter_even];           // pos: TOP or BOTTOM; !iter_even: current iteration
   int* completed = worker->completed;
 
   if(neighbour == NULL) {

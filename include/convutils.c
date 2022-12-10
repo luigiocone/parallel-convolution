@@ -5,7 +5,7 @@ int stick_this_thread_to_core(int core_id) {
   const long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
   if(num_threads > num_cores) return 0;
   if(core_id < 0) return 1;
-  if((num_threads * 2) <= num_cores) core_id++;   // Trying to avoid hyperthreading in a bad way
+  //if((num_threads * 2) <= num_cores) core_id *= 2;   // Worse performance if Hyper-Threading is avoided
 
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);

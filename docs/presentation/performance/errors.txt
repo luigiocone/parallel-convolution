@@ -1,0 +1,172 @@
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 4 -machinefile mf --map-by node ./conv 200 16 1
+[compute-0-3:53510] *** An error occurred in MPI_Irecv
+[compute-0-3:53510] *** reported by process [140468540276737,140724603453443]
+[compute-0-3:53510] *** on communicator MPI_COMM_WORLD
+[compute-0-3:53510] *** MPI_ERR_COUNT: invalid count argument
+[compute-0-3:53510] *** MPI_ERRORS_ARE_FATAL (processes in this communicator will now abort,
+[compute-0-3:53510] ***    and potentially your MPI job)
+[compute-0-0.local:67321] 2 more processes have sent help message help-mpi-errors.txt / mpi_errors_are_fatal
+[compute-0-0.local:67321] Set MCA parameter "orte_base_help_aggregate" to 0 to see all help / error messages
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 2 -machinefile mf --map-by node ./conv 200 16 1
+[compute-0-1:56668] *** Process received signal ***
+[compute-0-1:56668] Signal: Segmentation fault (11)
+[compute-0-1:56668] Signal code: Address not mapped (1)
+[compute-0-1:56668] Failing at address: 0x7f1f62ffe00c
+[compute-0-1:56668] [ 0] /lib64/libpthread.so.0(+0xf5e0)[0x7f1c7d0335e0]
+[compute-0-1:56668] [ 1] /lib64/libc.so.6(+0x8981d)[0x7f1c7c8fa81d]
+[compute-0-1:56668] [ 2] ./conv[0x40391a]
+[compute-0-1:56668] [ 3] /lib64/libc.so.6(__libc_start_main+0xf5)[0x7f1c7c892c05]
+[compute-0-1:56668] [ 4] ./conv[0x403991]
+[compute-0-1:56668] *** End of error message ***
+--------------------------------------------------------------------------
+An MPI communication peer process has unexpectedly disconnected.  This
+usually indicates a failure in the peer process (e.g., a crash or
+otherwise exiting without calling MPI_FINALIZE first).
+
+Although this local MPI process will likely now behave unpredictably
+(it may even hang or crash), the root cause of this problem is the
+failure of the peer -- that is what you need to investigate.  For
+example, there may be a core file that you can examine.  More
+generally: such peer hangups are frequently caused by application bugs
+or other external events.
+
+  Local host: compute-0-0
+  Local PID:  67553
+  Peer host:  compute-0-1
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpirun noticed that process rank 1 with PID 56668 on node compute-0-1 exited on signal 11 (Segmentation fault).
+--------------------------------------------------------------------------
+[ocone@compute-0-0 convolution]$
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 4 -machinefile mf --map-by node ./conv 200 16 1
+[1] Receiving | recv_size: 266240
+[2] Receiving | recv_size: 266240
+Sending to [1] | area: 262144 -> 528384 | ssize: 266240
+Sending to [2] | area: 524288 -> 790528 | ssize: 266240
+Sending to [3] | area: 786432 -> 1050624 | ssize: 264192
+
+[compute-0-3:77573] *** An error occurred in MPI_Irecv
+[compute-0-3:77573] *** reported by process [140252206006273,140720308486147]
+[compute-0-3:77573] *** on communicator MPI_COMM_WORLD
+[compute-0-3:77573] *** MPI_ERR_COUNT: invalid count argument
+[compute-0-3:77573] *** MPI_ERRORS_ARE_FATAL (processes in this communicator will now abort,
+[compute-0-3:77573] ***    and potentially your MPI job)
+--------------------------------------------------------------------------
+An MPI communication peer process has unexpectedly disconnected.  This
+usually indicates a failure in the peer process (e.g., a crash or
+otherwise exiting without calling MPI_FINALIZE first).
+
+Although this local MPI process will likely now behave unpredictably
+(it may even hang or crash), the root cause of this problem is the
+failure of the peer -- that is what you need to investigate.  For
+example, there may be a core file that you can examine.  More
+generally: such peer hangups are frequently caused by application bugs
+or other external events.
+
+  Local host: compute-0-2
+  Local PID:  3577
+  Peer host:  compute-0-3
+--------------------------------------------------------------------------
+[compute-0-0.local:91488] 1 more process has sent help message help-mpi-btl-tcp.txt / peer hung up
+[compute-0-0.local:91488] Set MCA parameter "orte_base_help_aggregate" to 0 to see all help / error messages
+
+
+
+
+
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 4 -machinefile mf --map-by node ./conv 200 16 1
+[1] Receiving | recv_size: 266240
+[2] Receiving | recv_size: 266240
+Sending to [1] | area: 262144 -> 528384 | ssize: 266240
+Sending to [2] | area: 524288 -> 790528 | ssize: 266240
+Sending to [3] | area: 786432 -> 1050624 | ssize: 264192
+
+[compute-0-3:77730] *** An error occurred in MPI_Irecv
+[compute-0-3:77730] *** reported by process [140114754732033,140720308486147]
+[compute-0-3:77730] *** on communicator MPI_COMM_WORLD
+[compute-0-3:77730] *** MPI_ERR_COUNT: invalid count argument
+[compute-0-3:77730] *** MPI_ERRORS_ARE_FATAL (processes in this communicator will now abort,
+[compute-0-3:77730] ***    and potentially your MPI job)
+--------------------------------------------------------------------------
+An MPI communication peer process has unexpectedly disconnected.  This
+usually indicates a failure in the peer process (e.g., a crash or
+otherwise exiting without calling MPI_FINALIZE first).
+
+Although this local MPI process will likely now behave unpredictably
+(it may even hang or crash), the root cause of this problem is the
+failure of the peer -- that is what you need to investigate.  For
+example, there may be a core file that you can examine.  More
+generally: such peer hangups are frequently caused by application bugs
+or other external events.
+
+  Local host: compute-0-2
+  Local PID:  3750
+  Peer host:  compute-0-3
+--------------------------------------------------------------------------
+[compute-0-0.local:91556] 1 more process has sent help message help-mpi-btl-tcp.txt / peer hung up
+[compute-0-0.local:91556] Set MCA parameter "orte_base_help_aggregate" to 0 to see all help / error messages
+
+
+
+
+
+
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 4 -machinefile mf --map-by node ./conv 200 16 1
+[1] Receiving | recv_size: 266240
+[2] Receiving | recv_size: 266240
+Sending to [1] | area: 262144 -> 528384 | ssize: 266240
+Sending to [2] | area: 524288 -> 790528 | ssize: 266240
+Sending to [3] | area: 786432 -> 1050624 | ssize: 264192
+
+[compute-0-3:77730] *** An error occurred in MPI_Irecv
+[compute-0-3:77730] *** reported by process [140114754732033,140720308486147]
+[compute-0-3:77730] *** on communicator MPI_COMM_WORLD
+[compute-0-3:77730] *** MPI_ERR_COUNT: invalid count argument
+[compute-0-3:77730] *** MPI_ERRORS_ARE_FATAL (processes in this communicator will now abort,
+[compute-0-3:77730] ***    and potentially your MPI job)
+--------------------------------------------------------------------------
+An MPI communication peer process has unexpectedly disconnected.  This
+usually indicates a failure in the peer process (e.g., a crash or
+otherwise exiting without calling MPI_FINALIZE first).
+
+Although this local MPI process will likely now behave unpredictably
+(it may even hang or crash), the root cause of this problem is the
+failure of the peer -- that is what you need to investigate.  For
+example, there may be a core file that you can examine.  More
+generally: such peer hangups are frequently caused by application bugs
+or other external events.
+
+  Local host: compute-0-2
+  Local PID:  3750
+  Peer host:  compute-0-3
+--------------------------------------------------------------------------
+[compute-0-0.local:91556] 1 more process has sent help message help-mpi-btl-tcp.txt / peer hung up
+[compute-0-0.local:91556] Set MCA parameter "orte_base_help_aggregate" to 0 to see all help / error messages

@@ -1,0 +1,15 @@
+*************************************************************
+PERFORMANCE: 
+- memoria distribuita
+- ottimizzazione mutua esclusione di mpi
+- rimossi ritardi non necessari
+- carico ancora poco bilanciato (nodo 2 bottleneck)
+*************************************************************
+
+
+// final.slog2
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,tcp --mca btl_tcp_if_include ib0 -np 4 -machinefile mf --map-by node ./conv 200 16 1
+Elapsed time: 165465 us
+Writing logfile....
+Enabling the Default clock synchronization...
+Finished writing logfile ./conv.clog2.

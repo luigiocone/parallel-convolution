@@ -40,7 +40,7 @@ case $1 in
     ;;
   
   clean)
-    rm -f conv*
+    rm -f *.o
     pkill -u ocone
     ;;
 

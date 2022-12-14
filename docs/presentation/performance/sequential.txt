@@ -1,0 +1,15 @@
+// WITH PSIMD (SSE3 + AVX)
+[ocone@compute-0-0 convolution]$ ./seq 200
+Rank[0] | Elapsed time: 7695961 us | Total L2 cache misses: 234625
+[ocone@compute-0-0 convolution]$ ./seq 200
+Rank[0] | Elapsed time: 7720365 us | Total L2 cache misses: 246100
+
+// NO PSIMD
+[ocone@compute-0-0 convolution]$ ./seq_ew 200
+Rank[0] | Elapsed time: 14076283 us | Total L2 cache misses: 610730
+[ocone@compute-0-0 convolution]$ ./seq_ew 200
+Rank[0] | Elapsed time: 13820835 us | Total L2 cache misses: 643970
+[ocone@compute-0-0 convolution]$ ./seq_ew 200
+Rank[0] | Elapsed time: 13802132 us | Total L2 cache misses: 629452
+[ocone@compute-0-0 convolution]$ ./seq_ew 200
+Rank[0] | Elapsed time: 13823792 us | Total L2 cache misses: 614576

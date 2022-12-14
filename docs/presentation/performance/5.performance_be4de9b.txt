@@ -1,0 +1,902 @@
+************************************************
+PERFORMANCE: 
+- memoria distribuita		
+- ottimizzazione mutua esclusione di mpi		
+- ritardi non necessari		
+- carico non bilanciato
+
+COMMIT: be4de9b
+************************************************
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 200 12 1
+Rank[0] | Elapsed time: 375899 us
+Rank[0] | Elapsed time to read from disk: 2759 us
+Thread[0][0]: Elapsed: 370965 us | Condition WT: 0 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 165 us | Total L2 cache misses: 154464
+Thread[0][1]: Elapsed: 370835 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 237 us | Total L2 cache misses: 176458
+Thread[0][2]: Elapsed: 370652 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 281 us | Total L2 cache misses: 175823
+Thread[0][3]: Elapsed: 370423 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 305 us | Total L2 cache misses: 175474
+Thread[0][4]: Elapsed: 369605 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 266 us | Total L2 cache misses: 175220
+Thread[0][5]: Elapsed: 370301 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 339 us | Total L2 cache misses: 171396
+Thread[0][6]: Elapsed: 368237 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 295 us | Total L2 cache misses: 180682
+Thread[0][7]: Elapsed: 368350 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 394 us | Total L2 cache misses: 184255
+Thread[0][8]: Elapsed: 368437 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 274 us | Total L2 cache misses: 174156
+Thread[0][9]: Elapsed: 368233 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 262 us | Total L2 cache misses: 172456
+Thread[0][10]: Elapsed: 368180 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 246 us | Total L2 cache misses: 169954
+Thread[0][11]: Elapsed: 368328 us | Condition WT: 0 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 281 us | Total L2 cache misses: 389255
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[1] | Elapsed time: 375899 us
+Thread[1][0]: Elapsed: 371984 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 1 us | LB mutex WT: 261 us | Total L2 cache misses: 404678
+Thread[1][1]: Elapsed: 371855 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 255 us | Total L2 cache misses: 174669
+Thread[1][2]: Elapsed: 372117 us | Condition WT: 0 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 331 us | Total L2 cache misses: 178562
+Thread[1][3]: Elapsed: 372118 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 302 us | Total L2 cache misses: 181301
+Thread[1][4]: Elapsed: 371339 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 249 us | Total L2 cache misses: 175793
+Thread[1][5]: Elapsed: 371690 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 288 us | Total L2 cache misses: 174424
+Thread[1][6]: Elapsed: 371206 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 282 us | Total L2 cache misses: 182657
+Thread[1][7]: Elapsed: 371346 us | Condition WT: 0 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 350 us | Total L2 cache misses: 185049
+Thread[1][8]: Elapsed: 371064 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 333 us | Total L2 cache misses: 180648
+Thread[1][9]: Elapsed: 370941 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 333 us | Total L2 cache misses: 180371
+Thread[1][10]: Elapsed: 371012 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 337 us | Total L2 cache misses: 183156
+Thread[1][11]: Elapsed: 371137 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 198 us | Total L2 cache misses: 155104
+Finished writing logfile ./conv.clog2.
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 200 12 1
+Rank[0] | Elapsed time: 373449 us
+Rank[0] | Elapsed time to read from disk: 3057 us
+Thread[0][0]: Elapsed: 368430 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 178 us | Total L2 cache misses: 156346
+Thread[0][1]: Elapsed: 367926 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 304 us | Total L2 cache misses: 172214
+Thread[0][2]: Elapsed: 367150 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 250 us | Total L2 cache misses: 171475
+Thread[0][3]: Elapsed: 367058 us | Condition WT: 0 us | Handlers mutex WT: 58 us | MPI mutex WT: 0 us | LB mutex WT: 280 us | Total L2 cache misses: 172906
+Thread[0][4]: Elapsed: 368145 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 317 us | Total L2 cache misses: 176171
+Thread[0][5]: Elapsed: 368330 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 271 us | Total L2 cache misses: 167361
+Thread[0][6]: Elapsed: 368237 us | Condition WT: 0 us | Handlers mutex WT: 50 us | MPI mutex WT: 0 us | LB mutex WT: 299 us | Total L2 cache misses: 180194
+Thread[0][7]: Elapsed: 368049 us | Condition WT: 0 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 310 us | Total L2 cache misses: 184351
+Thread[0][8]: Elapsed: 367804 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 267 us | Total L2 cache misses: 177581
+Thread[0][9]: Elapsed: 366928 us | Condition WT: 0 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 322 us | Total L2 cache misses: 177515
+Thread[0][10]: Elapsed: 367703 us | Condition WT: 0 us | Handlers mutex WT: 79 us | MPI mutex WT: 0 us | LB mutex WT: 265 us | Total L2 cache misses: 172078
+Thread[0][11]: Elapsed: 368537 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 311 us | Total L2 cache misses: 387956
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[1] | Elapsed time: 373448 us
+Thread[1][0]: Elapsed: 370358 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 1 us | LB mutex WT: 306 us | Total L2 cache misses: 400072
+Thread[1][1]: Elapsed: 370145 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 262 us | Total L2 cache misses: 170439
+Thread[1][2]: Elapsed: 369536 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 289 us | Total L2 cache misses: 173371
+Thread[1][3]: Elapsed: 370342 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 276 us | Total L2 cache misses: 167866
+Thread[1][4]: Elapsed: 370025 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 284 us | Total L2 cache misses: 174080
+Thread[1][5]: Elapsed: 369839 us | Condition WT: 0 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 302 us | Total L2 cache misses: 177006
+Thread[1][6]: Elapsed: 369396 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 275 us | Total L2 cache misses: 178214
+Thread[1][7]: Elapsed: 369108 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 353 us | Total L2 cache misses: 185029
+Thread[1][8]: Elapsed: 369224 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 351 us | Total L2 cache misses: 179011
+Thread[1][9]: Elapsed: 369371 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 318 us | Total L2 cache misses: 171587
+Thread[1][10]: Elapsed: 369176 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 292 us | Total L2 cache misses: 180449
+Thread[1][11]: Elapsed: 369252 us | Condition WT: 0 us | Handlers mutex WT: 59 us | MPI mutex WT: 0 us | LB mutex WT: 202 us | Total L2 cache misses: 161152
+Finished writing logfile ./conv.clog2.
+
+
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 200 16 1
+Rank[0] | Elapsed time: 283161 us
+Rank[0] | Elapsed time to read from disk: 2722 us
+Thread[0][0]: Elapsed: 280228 us | Condition WT: 0 us | Handlers mutex WT: 7 us | MPI mutex WT: 0 us | LB mutex WT: 36 us | Total L2 cache misses: 93757
+Thread[0][1]: Elapsed: 280357 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 246 us | Total L2 cache misses: 127932
+Thread[0][2]: Elapsed: 279847 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 272 us | Total L2 cache misses: 126972
+Thread[0][3]: Elapsed: 280177 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 247 us | Total L2 cache misses: 127081
+Thread[0][4]: Elapsed: 279768 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 247 us | Total L2 cache misses: 131471
+Thread[0][5]: Elapsed: 279295 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 241 us | Total L2 cache misses: 129003
+Thread[0][6]: Elapsed: 279139 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 277 us | Total L2 cache misses: 129981
+Thread[0][7]: Elapsed: 279560 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 252 us | Total L2 cache misses: 121228
+Thread[0][8]: Elapsed: 277882 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 309 us | Total L2 cache misses: 122970
+Thread[0][9]: Elapsed: 278147 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 225 us | Total L2 cache misses: 118287
+Thread[0][10]: Elapsed: 277811 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 121729
+Thread[0][11]: Elapsed: 277713 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 282 us | Total L2 cache misses: 133901
+Thread[0][12]: Elapsed: 276984 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 183 us | Total L2 cache misses: 113941
+Thread[0][13]: Elapsed: 275282 us | Condition WT: 0 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 114399
+Thread[0][14]: Elapsed: 277064 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 242 us | Total L2 cache misses: 123112
+Thread[0][15]: Elapsed: 277729 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 195 us | Total L2 cache misses: 362643
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[1] | Elapsed time: 283160 us
+Thread[1][0]: Elapsed: 280488 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 1 us | LB mutex WT: 236 us | Total L2 cache misses: 351159
+Thread[1][1]: Elapsed: 280338 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 125353
+Thread[1][2]: Elapsed: 279326 us | Condition WT: 0 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 235 us | Total L2 cache misses: 125625
+Thread[1][3]: Elapsed: 279125 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 254 us | Total L2 cache misses: 118576
+Thread[1][4]: Elapsed: 279319 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 248 us | Total L2 cache misses: 118370
+Thread[1][5]: Elapsed: 279001 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 209 us | Total L2 cache misses: 122961
+Thread[1][6]: Elapsed: 279152 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 124229
+Thread[1][7]: Elapsed: 278813 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 123144
+Thread[1][8]: Elapsed: 278651 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 214 us | Total L2 cache misses: 125857
+Thread[1][9]: Elapsed: 278587 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 232 us | Total L2 cache misses: 117015
+Thread[1][10]: Elapsed: 278892 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 219 us | Total L2 cache misses: 116272
+Thread[1][11]: Elapsed: 278872 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 121357
+Thread[1][12]: Elapsed: 278602 us | Condition WT: 0 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 262 us | Total L2 cache misses: 117592
+Thread[1][13]: Elapsed: 278482 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 244 us | Total L2 cache misses: 118593
+Thread[1][14]: Elapsed: 278475 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 270 us | Total L2 cache misses: 118047
+Thread[1][15]: Elapsed: 279994 us | Condition WT: 0 us | Handlers mutex WT: 3 us | MPI mutex WT: 0 us | LB mutex WT: 35 us | Total L2 cache misses: 111220
+Finished writing logfile ./conv.clog2.
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 200 16 1
+Rank[0] | Elapsed time: 282552 us
+Rank[0] | Elapsed time to read from disk: 2014 us
+Thread[0][0]: Elapsed: 278505 us | Condition WT: 269 us | Handlers mutex WT: 6 us | MPI mutex WT: 0 us | LB mutex WT: 33 us | Total L2 cache misses: 101711
+Thread[0][1]: Elapsed: 274390 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 197 us | Total L2 cache misses: 129120
+Thread[0][2]: Elapsed: 277866 us | Condition WT: 304 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 140017
+Thread[0][3]: Elapsed: 277930 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 252 us | Total L2 cache misses: 140058
+Thread[0][4]: Elapsed: 277999 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 255 us | Total L2 cache misses: 138355
+Thread[0][5]: Elapsed: 277753 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 240 us | Total L2 cache misses: 137856
+Thread[0][6]: Elapsed: 277442 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 236 us | Total L2 cache misses: 135955
+Thread[0][7]: Elapsed: 274506 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 240 us | Total L2 cache misses: 129275
+Thread[0][8]: Elapsed: 276402 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 245 us | Total L2 cache misses: 133719
+Thread[0][9]: Elapsed: 277790 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 284 us | Total L2 cache misses: 139512
+Thread[0][10]: Elapsed: 276480 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 237 us | Total L2 cache misses: 132544
+Thread[0][11]: Elapsed: 278118 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 284 us | Total L2 cache misses: 135782
+Thread[0][12]: Elapsed: 277586 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 259 us | Total L2 cache misses: 139124
+Thread[0][13]: Elapsed: 276327 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 221 us | Total L2 cache misses: 130185
+Thread[0][14]: Elapsed: 274256 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 191 us | Total L2 cache misses: 125561
+Thread[0][15]: Elapsed: 278012 us | Condition WT: 310 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 225 us | Total L2 cache misses: 365218
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[1] | Elapsed time: 282551 us
+Thread[1][0]: Elapsed: 280086 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 224 us | Total L2 cache misses: 356668
+Thread[1][1]: Elapsed: 279718 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 237 us | Total L2 cache misses: 128746
+Thread[1][2]: Elapsed: 279707 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 238 us | Total L2 cache misses: 120811
+Thread[1][3]: Elapsed: 279452 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 282 us | Total L2 cache misses: 132385
+Thread[1][4]: Elapsed: 279447 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 225 us | Total L2 cache misses: 130025
+Thread[1][5]: Elapsed: 278486 us | Condition WT: 0 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 224 us | Total L2 cache misses: 125020
+Thread[1][6]: Elapsed: 278776 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 198 us | Total L2 cache misses: 121643
+Thread[1][7]: Elapsed: 279059 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 300 us | Total L2 cache misses: 128352
+Thread[1][8]: Elapsed: 279202 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 253 us | Total L2 cache misses: 122774
+Thread[1][9]: Elapsed: 278676 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 268 us | Total L2 cache misses: 118346
+Thread[1][10]: Elapsed: 278262 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 263 us | Total L2 cache misses: 121724
+Thread[1][11]: Elapsed: 278389 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 220 us | Total L2 cache misses: 124238
+Thread[1][12]: Elapsed: 278260 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 121985
+Thread[1][13]: Elapsed: 278096 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 263 us | Total L2 cache misses: 127753
+Thread[1][14]: Elapsed: 278116 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 116136
+Thread[1][15]: Elapsed: 279442 us | Condition WT: 0 us | Handlers mutex WT: 6 us | MPI mutex WT: 0 us | LB mutex WT: 30 us | Total L2 cache misses: 103622
+Finished writing logfile ./conv.clog2.
+
+
+
+Rank[0] | Elapsed time: 233228 us
+Rank[0] | Elapsed time to read from disk: 1787 us
+Thread[0][0]: Elapsed: 227765 us | Condition WT: 0 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 103 us | Total L2 cache misses: 66727
+Thread[0][1]: Elapsed: 227785 us | Condition WT: 0 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 230 us | Total L2 cache misses: 95666
+Thread[0][2]: Elapsed: 227624 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 225 us | Total L2 cache misses: 91874
+Thread[0][3]: Elapsed: 227613 us | Condition WT: 0 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 231 us | Total L2 cache misses: 96614
+Thread[0][4]: Elapsed: 227630 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 212 us | Total L2 cache misses: 100679
+Thread[0][5]: Elapsed: 227555 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 267 us | Total L2 cache misses: 95858
+Thread[0][6]: Elapsed: 227371 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 217 us | Total L2 cache misses: 106075
+Thread[0][7]: Elapsed: 227500 us | Condition WT: 0 us | Handlers mutex WT: 60 us | MPI mutex WT: 0 us | LB mutex WT: 254 us | Total L2 cache misses: 106649
+Thread[0][8]: Elapsed: 227376 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 281 us | Total L2 cache misses: 99468
+Thread[0][9]: Elapsed: 227398 us | Condition WT: 0 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 95961
+Thread[0][10]: Elapsed: 227342 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 235 us | Total L2 cache misses: 98547
+Thread[0][11]: Elapsed: 227329 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 97544
+Thread[0][12]: Elapsed: 227309 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 1 us | LB mutex WT: 260 us | Total L2 cache misses: 305662
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[1] | Elapsed time: 233028 us
+Thread[1][0]: Elapsed: 229555 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 239134
+Thread[1][1]: Elapsed: 229547 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 92499
+Thread[1][2]: Elapsed: 229543 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 208 us | Total L2 cache misses: 94070
+Thread[1][3]: Elapsed: 229575 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 200 us | Total L2 cache misses: 93048
+Thread[1][4]: Elapsed: 229013 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 226 us | Total L2 cache misses: 94083
+Thread[1][5]: Elapsed: 228985 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 252 us | Total L2 cache misses: 88352
+Thread[1][6]: Elapsed: 228967 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 293 us | Total L2 cache misses: 110442
+Thread[1][7]: Elapsed: 228924 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 328 us | Total L2 cache misses: 105959
+Thread[1][8]: Elapsed: 228931 us | Condition WT: 0 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 251 us | Total L2 cache misses: 95957
+Thread[1][9]: Elapsed: 228920 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 252 us | Total L2 cache misses: 97009
+Thread[1][10]: Elapsed: 228921 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 283 us | Total L2 cache misses: 91961
+Thread[1][11]: Elapsed: 228824 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 352 us | Total L2 cache misses: 97115
+Thread[1][12]: Elapsed: 228862 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 1 us | LB mutex WT: 290 us | Total L2 cache misses: 339761
+Rank[2] | Elapsed time: 233230 us
+Thread[2][0]: Elapsed: 229457 us | Condition WT: 0 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 187 us | Total L2 cache misses: 304595
+Thread[2][1]: Elapsed: 229495 us | Condition WT: 0 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 208 us | Total L2 cache misses: 91422
+Thread[2][2]: Elapsed: 229519 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 227 us | Total L2 cache misses: 95981
+Thread[2][3]: Elapsed: 229481 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 192 us | Total L2 cache misses: 99251
+Thread[2][4]: Elapsed: 229468 us | Condition WT: 0 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 202 us | Total L2 cache misses: 99175
+Thread[2][5]: Elapsed: 229485 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 220 us | Total L2 cache misses: 96453
+Thread[2][6]: Elapsed: 229511 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 204 us | Total L2 cache misses: 102644
+Thread[2][7]: Elapsed: 229471 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 243 us | Total L2 cache misses: 98500
+Thread[2][8]: Elapsed: 229487 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 273 us | Total L2 cache misses: 99411
+Thread[2][9]: Elapsed: 229291 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 232 us | Total L2 cache misses: 94874
+Thread[2][10]: Elapsed: 229304 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 298 us | Total L2 cache misses: 94945
+Thread[2][11]: Elapsed: 229274 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 264 us | Total L2 cache misses: 97668
+Thread[2][12]: Elapsed: 229285 us | Condition WT: 0 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 121 us | Total L2 cache misses: 67527
+Finished writing logfile ./conv.clog2.
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 3 -machinefile mf --map-by node ./conv 200 13 1
+Rank[0] | Elapsed time: 231636 us
+Rank[0] | Elapsed time to read from disk: 1762 us
+Thread[0][0]: Elapsed: 228738 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 107 us | Total L2 cache misses: 71618
+Thread[0][1]: Elapsed: 228681 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 92729
+Thread[0][2]: Elapsed: 228661 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 94331
+Thread[0][3]: Elapsed: 228662 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 196 us | Total L2 cache misses: 95595
+Thread[0][4]: Elapsed: 228662 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 256 us | Total L2 cache misses: 97499
+Thread[0][5]: Elapsed: 228653 us | Condition WT: 0 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 272 us | Total L2 cache misses: 97715
+Thread[0][6]: Elapsed: 228424 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 235 us | Total L2 cache misses: 103310
+Thread[0][7]: Elapsed: 228415 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 367 us | Total L2 cache misses: 108622
+Thread[0][8]: Elapsed: 228275 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 302 us | Total L2 cache misses: 97680
+Thread[0][9]: Elapsed: 228338 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 272 us | Total L2 cache misses: 95552
+Thread[0][10]: Elapsed: 228251 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 251 us | Total L2 cache misses: 98318
+Thread[0][11]: Elapsed: 228250 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 96266
+Thread[0][12]: Elapsed: 228261 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 282 us | Total L2 cache misses: 301995
+Rank[1] | Elapsed time: 231352 us
+Thread[1][0]: Elapsed: 228736 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 183 us | Total L2 cache misses: 246462
+Thread[1][1]: Elapsed: 228682 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 245 us | Total L2 cache misses: 99444
+Thread[1][2]: Elapsed: 228719 us | Condition WT: 0 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 246 us | Total L2 cache misses: 99942
+Thread[1][3]: Elapsed: 228741 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 209 us | Total L2 cache misses: 98820
+Thread[1][4]: Elapsed: 228619 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 281 us | Total L2 cache misses: 104079
+Thread[1][5]: Elapsed: 228669 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 231 us | Total L2 cache misses: 99904
+Thread[1][6]: Elapsed: 228670 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 225 us | Total L2 cache misses: 105241
+Thread[1][7]: Elapsed: 228677 us | Condition WT: 0 us | Handlers mutex WT: 60 us | MPI mutex WT: 0 us | LB mutex WT: 257 us | Total L2 cache misses: 104654
+Writing logfile....
+Enabling the Default clock synchronization...
+Thread[1][8]: Elapsed: 228575 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 242 us | Total L2 cache misses: 102273
+Thread[1][9]: Elapsed: 228562 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 247 us | Total L2 cache misses: 106754
+Thread[1][10]: Elapsed: 228538 us | Condition WT: 0 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 257 us | Total L2 cache misses: 101558
+Thread[1][11]: Elapsed: 228536 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 240 us | Total L2 cache misses: 102095
+Thread[1][12]: Elapsed: 228524 us | Condition WT: 64 us | Handlers mutex WT: 35 us | MPI mutex WT: 3 us | LB mutex WT: 238 us | Total L2 cache misses: 345439
+Rank[2] | Elapsed time: 231641 us
+Thread[2][0]: Elapsed: 229131 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 188 us | Total L2 cache misses: 305725
+Thread[2][1]: Elapsed: 228926 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 234 us | Total L2 cache misses: 94717
+Thread[2][2]: Elapsed: 229007 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 206 us | Total L2 cache misses: 94520
+Thread[2][3]: Elapsed: 229002 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 249 us | Total L2 cache misses: 98179
+Thread[2][4]: Elapsed: 228978 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 235 us | Total L2 cache misses: 98778
+Thread[2][5]: Elapsed: 229088 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 210 us | Total L2 cache misses: 100033
+Thread[2][6]: Elapsed: 228974 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 231 us | Total L2 cache misses: 100793
+Thread[2][7]: Elapsed: 229022 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 218 us | Total L2 cache misses: 97854
+Thread[2][8]: Elapsed: 228901 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 278 us | Total L2 cache misses: 97710
+Thread[2][9]: Elapsed: 228882 us | Condition WT: 0 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 233 us | Total L2 cache misses: 104146
+Thread[2][10]: Elapsed: 228880 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 279 us | Total L2 cache misses: 102444
+Thread[2][11]: Elapsed: 228851 us | Condition WT: 0 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 263 us | Total L2 cache misses: 96617
+Thread[2][12]: Elapsed: 228847 us | Condition WT: 0 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 120 us | Total L2 cache misses: 67064
+Finished writing logfile ./conv.clog2.
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 3 -machinefile mf --map-by node ./conv 200 16 1
+Rank[1] | Elapsed time: 192365 us
+Thread[1][0]: Elapsed: 189372 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 1 us | LB mutex WT: 258 us | Total L2 cache misses: 203558
+Thread[1][1]: Elapsed: 189142 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 256 us | Total L2 cache misses: 95658
+Thread[1][2]: Elapsed: 189228 us | Condition WT: 0 us | Handlers mutex WT: 16 us | MPI mutex WT: 0 us | LB mutex WT: 250 us | Total L2 cache misses: 92803
+Thread[1][3]: Elapsed: 189208 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 273 us | Total L2 cache misses: 94695
+Thread[1][4]: Elapsed: 189224 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 90192
+Thread[1][5]: Elapsed: 189083 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 263 us | Total L2 cache misses: 88819
+Thread[1][6]: Elapsed: 189066 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 261 us | Total L2 cache misses: 90551
+Thread[1][7]: Elapsed: 189043 us | Condition WT: 0 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 298 us | Total L2 cache misses: 91518
+Thread[1][8]: Elapsed: 189038 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 86064
+Thread[1][9]: Elapsed: 189008 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 324 us | Total L2 cache misses: 85803
+Thread[1][10]: Elapsed: 189001 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 262 us | Total L2 cache misses: 87808
+Thread[1][11]: Elapsed: 188982 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 292 us | Total L2 cache misses: 89688
+Thread[1][12]: Elapsed: 188956 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 297 us | Total L2 cache misses: 87584
+Thread[1][13]: Elapsed: 188482 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 282 us | Total L2 cache misses: 91812
+Thread[1][14]: Elapsed: 188486 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 299 us | Total L2 cache misses: 97201
+Thread[1][15]: Elapsed: 188830 us | Condition WT: 0 us | Handlers mutex WT: 19 us | MPI mutex WT: 1 us | LB mutex WT: 200 us | Total L2 cache misses: 338141
+Rank[0] | Elapsed time: 193431 us
+Rank[0] | Elapsed time to read from disk: 2935 us
+Thread[0][0]: Elapsed: 188134 us | Condition WT: 0 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 101 us | Total L2 cache misses: 58017
+Thread[0][1]: Elapsed: 188108 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 280 us | Total L2 cache misses: 81455
+Thread[0][2]: Elapsed: 188084 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 273 us | Total L2 cache misses: 81632
+Thread[0][3]: Elapsed: 188054 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 278 us | Total L2 cache misses: 83895
+Thread[0][4]: Elapsed: 188102 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 249 us | Total L2 cache misses: 80911
+Thread[0][5]: Elapsed: 188080 us | Condition WT: 0 us | Handlers mutex WT: 16 us | MPI mutex WT: 0 us | LB mutex WT: 282 us | Total L2 cache misses: 83349
+Thread[0][6]: Elapsed: 187546 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 302 us | Total L2 cache misses: 83096
+Thread[0][7]: Elapsed: 187498 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 285 us | Total L2 cache misses: 81905
+Thread[0][8]: Elapsed: 187515 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 279 us | Total L2 cache misses: 82280
+Thread[0][9]: Elapsed: 187457 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 357 us | Total L2 cache misses: 82227
+Thread[0][10]: Elapsed: 187411 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 327 us | Total L2 cache misses: 82573
+Thread[0][11]: Elapsed: 187401 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 339 us | Total L2 cache misses: 82404
+Thread[0][12]: Elapsed: 187378 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 354 us | Total L2 cache misses: 84013
+Thread[0][13]: Elapsed: 187358 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 372 us | Total L2 cache misses: 83356
+Thread[0][14]: Elapsed: 187329 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 382 us | Total L2 cache misses: 87685
+Thread[0][15]: Elapsed: 187308 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 2 us | LB mutex WT: 278 us | Total L2 cache misses: 283811
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[2] | Elapsed time: 193430 us
+Thread[2][0]: Elapsed: 190166 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 1 us | LB mutex WT: 332 us | Total L2 cache misses: 266949
+Thread[2][1]: Elapsed: 190187 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 256 us | Total L2 cache misses: 81326
+Thread[2][2]: Elapsed: 190182 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 330 us | Total L2 cache misses: 84335
+Thread[2][3]: Elapsed: 190168 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 276 us | Total L2 cache misses: 83665
+Thread[2][4]: Elapsed: 189743 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 251 us | Total L2 cache misses: 84932
+Thread[2][5]: Elapsed: 189684 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 240 us | Total L2 cache misses: 82529
+Thread[2][6]: Elapsed: 189619 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 256 us | Total L2 cache misses: 80842
+Thread[2][7]: Elapsed: 189674 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 242 us | Total L2 cache misses: 82036
+Thread[2][8]: Elapsed: 189617 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 253 us | Total L2 cache misses: 79572
+Thread[2][9]: Elapsed: 189596 us | Condition WT: 0 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 395 us | Total L2 cache misses: 86063
+Thread[2][10]: Elapsed: 189528 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 361 us | Total L2 cache misses: 87083
+Thread[2][11]: Elapsed: 189506 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 301 us | Total L2 cache misses: 84795
+Thread[2][12]: Elapsed: 189491 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 276 us | Total L2 cache misses: 84018
+Thread[2][13]: Elapsed: 189487 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 342 us | Total L2 cache misses: 81411
+Thread[2][14]: Elapsed: 189437 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 306 us | Total L2 cache misses: 80436
+Thread[2][15]: Elapsed: 189439 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 125 us | Total L2 cache misses: 58420
+Finished writing logfile ./conv.clog2.
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 3 -machinefile mf --map-by node ./conv 200 16 1
+Rank[1] | Elapsed time: 190683 us
+Thread[1][0]: Elapsed: 189301 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 194 us | Total L2 cache misses: 193758
+Thread[1][1]: Elapsed: 189205 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 306 us | Total L2 cache misses: 89626
+Thread[1][2]: Elapsed: 189184 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 300 us | Total L2 cache misses: 89482
+Thread[1][3]: Elapsed: 188823 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 292 us | Total L2 cache misses: 87786
+Thread[1][4]: Elapsed: 188865 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 313 us | Total L2 cache misses: 88791
+Thread[1][5]: Elapsed: 188807 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 285 us | Total L2 cache misses: 87117
+Thread[1][6]: Elapsed: 188547 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 294 us | Total L2 cache misses: 88679
+Thread[1][7]: Elapsed: 188575 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 305 us | Total L2 cache misses: 84250
+Thread[1][8]: Elapsed: 188606 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 305 us | Total L2 cache misses: 88307
+Thread[1][9]: Elapsed: 188488 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 290 us | Total L2 cache misses: 89427
+Thread[1][10]: Elapsed: 188473 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 296 us | Total L2 cache misses: 85737
+Thread[1][11]: Elapsed: 188420 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 272 us | Total L2 cache misses: 84760
+Thread[1][12]: Elapsed: 188429 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 351 us | Total L2 cache misses: 86857
+Thread[1][13]: Elapsed: 188413 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 311 us | Total L2 cache misses: 91507
+Thread[1][14]: Elapsed: 188400 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 369 us | Total L2 cache misses: 89222
+Thread[1][15]: Elapsed: 188683 us | Condition WT: 0 us | Handlers mutex WT: 18 us | MPI mutex WT: 3 us | LB mutex WT: 174 us | Total L2 cache misses: 324561
+Rank[0] | Elapsed time: 191821 us
+Rank[0] | Elapsed time to read from disk: 2575 us
+Thread[0][0]: Elapsed: 187771 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 129 us | Total L2 cache misses: 60220
+Thread[0][1]: Elapsed: 187771 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 304 us | Total L2 cache misses: 85019
+Thread[0][2]: Elapsed: 187759 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 290 us | Total L2 cache misses: 84569
+Thread[0][3]: Elapsed: 187627 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 285 us | Total L2 cache misses: 82979
+Thread[0][4]: Elapsed: 187659 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 300 us | Total L2 cache misses: 85400
+Thread[0][5]: Elapsed: 187659 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 248 us | Total L2 cache misses: 80541
+Thread[0][6]: Elapsed: 187573 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 290 us | Total L2 cache misses: 85353
+Thread[0][7]: Elapsed: 187597 us | Condition WT: 0 us | Handlers mutex WT: 72 us | MPI mutex WT: 0 us | LB mutex WT: 331 us | Total L2 cache misses: 85402
+Thread[0][8]: Elapsed: 187567 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 308 us | Total L2 cache misses: 82360
+Thread[0][9]: Elapsed: 187496 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 367 us | Total L2 cache misses: 83680
+Thread[0][10]: Elapsed: 187449 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 324 us | Total L2 cache misses: 81055
+Thread[0][11]: Elapsed: 187404 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 409 us | Total L2 cache misses: 82647
+Thread[0][12]: Elapsed: 187328 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 290 us | Total L2 cache misses: 81023
+Thread[0][13]: Elapsed: 187323 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 251 us | Total L2 cache misses: 80271
+Thread[0][14]: Elapsed: 187315 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 297 us | Total L2 cache misses: 85369
+Thread[0][15]: Elapsed: 187326 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 2 us | LB mutex WT: 225 us | Total L2 cache misses: 276208
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[2] | Elapsed time: 191824 us
+Thread[2][0]: Elapsed: 190205 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 194 us | Total L2 cache misses: 275237
+Thread[2][1]: Elapsed: 189858 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 280 us | Total L2 cache misses: 90949
+Thread[2][2]: Elapsed: 190194 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 351 us | Total L2 cache misses: 95015
+Thread[2][3]: Elapsed: 189824 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 269 us | Total L2 cache misses: 91429
+Thread[2][4]: Elapsed: 189797 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 247 us | Total L2 cache misses: 95638
+Thread[2][5]: Elapsed: 189844 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 247 us | Total L2 cache misses: 87847
+Thread[2][6]: Elapsed: 189612 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 284 us | Total L2 cache misses: 88794
+Thread[2][7]: Elapsed: 189607 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 251 us | Total L2 cache misses: 88027
+Thread[2][8]: Elapsed: 189596 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 287 us | Total L2 cache misses: 87012
+Thread[2][9]: Elapsed: 189534 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 230 us | Total L2 cache misses: 85188
+Thread[2][10]: Elapsed: 189526 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 277 us | Total L2 cache misses: 88492
+Thread[2][11]: Elapsed: 189519 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 328 us | Total L2 cache misses: 93397
+Thread[2][12]: Elapsed: 189525 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 279 us | Total L2 cache misses: 91203
+Thread[2][13]: Elapsed: 189490 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 267 us | Total L2 cache misses: 90050
+Thread[2][14]: Elapsed: 189022 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 288 us | Total L2 cache misses: 90823
+Thread[2][15]: Elapsed: 189050 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 112 us | Total L2 cache misses: 60240
+Finished writing logfile ./conv.clog2.
+
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 200 14 1
+Rank[1] | Elapsed time: 204645 us
+Thread[1][0]: Elapsed: 189533 us | Condition WT: 61 us | Handlers mutex WT: 34 us | MPI mutex WT: 640 us | LB mutex WT: 193 us | Total L2 cache misses: 213723
+Thread[1][1]: Elapsed: 189555 us | Condition WT: 8986 us | Handlers mutex WT: 74 us | MPI mutex WT: 0 us | LB mutex WT: 248 us | Total L2 cache misses: 92616
+Thread[1][2]: Elapsed: 189379 us | Condition WT: 7225 us | Handlers mutex WT: 71 us | MPI mutex WT: 0 us | LB mutex WT: 266 us | Total L2 cache misses: 93481
+Thread[1][3]: Elapsed: 189335 us | Condition WT: 5053 us | Handlers mutex WT: 58 us | MPI mutex WT: 0 us | LB mutex WT: 271 us | Total L2 cache misses: 98162
+Thread[1][4]: Elapsed: 188387 us | Condition WT: 3058 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 306 us | Total L2 cache misses: 95122
+Thread[1][5]: Elapsed: 188423 us | Condition WT: 945 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 314 us | Total L2 cache misses: 97136
+Thread[1][6]: Elapsed: 188321 us | Condition WT: 0 us | Handlers mutex WT: 71 us | MPI mutex WT: 0 us | LB mutex WT: 354 us | Total L2 cache misses: 93440
+Thread[1][7]: Elapsed: 190157 us | Condition WT: 30074 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 195 us | Total L2 cache misses: 94940
+Thread[1][8]: Elapsed: 191805 us | Condition WT: 38614 us | Handlers mutex WT: 50 us | MPI mutex WT: 0 us | LB mutex WT: 23 us | Total L2 cache misses: 86681
+Thread[1][9]: Elapsed: 193407 us | Condition WT: 40630 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 10 us | Total L2 cache misses: 84893
+Thread[1][10]: Elapsed: 195089 us | Condition WT: 42738 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 3 us | Total L2 cache misses: 84242
+Thread[1][11]: Elapsed: 196686 us | Condition WT: 44485 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 3 us | Total L2 cache misses: 87752
+Thread[1][12]: Elapsed: 198257 us | Condition WT: 46616 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 87440
+Thread[1][13]: Elapsed: 199964 us | Condition WT: 728 us | Handlers mutex WT: 0 us | MPI mutex WT: 118 us | LB mutex WT: 0 us | Total L2 cache misses: 278737
+Rank[3] | Elapsed time: 205289 us
+Thread[3][0]: Elapsed: 183933 us | Condition WT: 0 us | Handlers mutex WT: 3 us | MPI mutex WT: 92 us | LB mutex WT: 10 us | Total L2 cache misses: 215617
+Thread[3][1]: Elapsed: 182185 us | Condition WT: 30595 us | Handlers mutex WT: 67 us | MPI mutex WT: 0 us | LB mutex WT: 18 us | Total L2 cache misses: 83844
+Thread[3][2]: Elapsed: 180558 us | Condition WT: 28406 us | Handlers mutex WT: 62 us | MPI mutex WT: 0 us | LB mutex WT: 55 us | Total L2 cache misses: 84524
+Thread[3][3]: Elapsed: 178849 us | Condition WT: 26497 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 41 us | Total L2 cache misses: 87932
+Thread[3][4]: Elapsed: 177337 us | Condition WT: 24351 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 52 us | Total L2 cache misses: 85168
+Thread[3][5]: Elapsed: 175699 us | Condition WT: 22278 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 53 us | Total L2 cache misses: 90857
+Thread[3][6]: Elapsed: 174378 us | Condition WT: 19862 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 80 us | Total L2 cache misses: 81891
+Thread[3][7]: Elapsed: 173251 us | Condition WT: 0 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 393 us | Total L2 cache misses: 130915
+Thread[3][8]: Elapsed: 173136 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 412 us | Total L2 cache misses: 99755
+Thread[3][9]: Elapsed: 173138 us | Condition WT: 0 us | Handlers mutex WT: 54 us | MPI mutex WT: 0 us | LB mutex WT: 292 us | Total L2 cache misses: 89556
+Thread[3][10]: Elapsed: 173089 us | Condition WT: 0 us | Handlers mutex WT: 59 us | MPI mutex WT: 0 us | LB mutex WT: 328 us | Total L2 cache misses: 92468
+Thread[3][11]: Elapsed: 173110 us | Condition WT: 0 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 319 us | Total L2 cache misses: 91323
+Thread[3][12]: Elapsed: 173083 us | Condition WT: 0 us | Handlers mutex WT: 57 us | MPI mutex WT: 0 us | LB mutex WT: 351 us | Total L2 cache misses: 91971
+Thread[3][13]: Elapsed: 173048 us | Condition WT: 0 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 205 us | Total L2 cache misses: 71919
+Rank[0] | Elapsed time: 206626 us
+Rank[0] | Elapsed time to read from disk: 2821 us
+Thread[0][0]: Elapsed: 174114 us | Condition WT: 0 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 76218
+Thread[0][1]: Elapsed: 173975 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 271 us | Total L2 cache misses: 88948
+Thread[0][2]: Elapsed: 174026 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 319 us | Total L2 cache misses: 87572
+Thread[0][3]: Elapsed: 174032 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 317 us | Total L2 cache misses: 88098
+Thread[0][4]: Elapsed: 173966 us | Condition WT: 0 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 285 us | Total L2 cache misses: 89935
+Thread[0][5]: Elapsed: 174109 us | Condition WT: 0 us | Handlers mutex WT: 72 us | MPI mutex WT: 0 us | LB mutex WT: 300 us | Total L2 cache misses: 90108
+Thread[0][6]: Elapsed: 173947 us | Condition WT: 0 us | Handlers mutex WT: 50 us | MPI mutex WT: 0 us | LB mutex WT: 298 us | Total L2 cache misses: 87806
+Thread[0][7]: Elapsed: 175900 us | Condition WT: 13801 us | Handlers mutex WT: 67 us | MPI mutex WT: 0 us | LB mutex WT: 280 us | Total L2 cache misses: 97248
+Thread[0][8]: Elapsed: 177547 us | Condition WT: 17834 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 142 us | Total L2 cache misses: 92415
+Thread[0][9]: Elapsed: 178888 us | Condition WT: 23815 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 84 us | Total L2 cache misses: 84448
+Thread[0][10]: Elapsed: 180711 us | Condition WT: 28931 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 26 us | Total L2 cache misses: 87346
+Thread[0][11]: Elapsed: 182346 us | Condition WT: 30934 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 80282
+Thread[0][12]: Elapsed: 183744 us | Condition WT: 32625 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 81308
+Thread[0][13]: Elapsed: 185616 us | Condition WT: 0 us | Handlers mutex WT: 1 us | MPI mutex WT: 77 us | LB mutex WT: 0 us | Total L2 cache misses: 214324
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[2] | Elapsed time: 206613 us
+Thread[2][0]: Elapsed: 202389 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 227 us | Total L2 cache misses: 235892
+Thread[2][1]: Elapsed: 202390 us | Condition WT: 10483 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 303 us | Total L2 cache misses: 82410
+Thread[2][2]: Elapsed: 202501 us | Condition WT: 8391 us | Handlers mutex WT: 60 us | MPI mutex WT: 0 us | LB mutex WT: 299 us | Total L2 cache misses: 80987
+Thread[2][3]: Elapsed: 202514 us | Condition WT: 5828 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 331 us | Total L2 cache misses: 82380
+Thread[2][4]: Elapsed: 202352 us | Condition WT: 3136 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 343 us | Total L2 cache misses: 86762
+Thread[2][5]: Elapsed: 202359 us | Condition WT: 613 us | Handlers mutex WT: 65 us | MPI mutex WT: 0 us | LB mutex WT: 377 us | Total L2 cache misses: 87455
+Thread[2][6]: Elapsed: 202336 us | Condition WT: 0 us | Handlers mutex WT: 68 us | MPI mutex WT: 0 us | LB mutex WT: 419 us | Total L2 cache misses: 84242
+Thread[2][7]: Elapsed: 202355 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 197 us | Total L2 cache misses: 72089
+Thread[2][8]: Elapsed: 202306 us | Condition WT: 584 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 239 us | Total L2 cache misses: 72096
+Thread[2][9]: Elapsed: 202313 us | Condition WT: 2695 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 132 us | Total L2 cache misses: 77806
+Thread[2][10]: Elapsed: 201648 us | Condition WT: 5110 us | Handlers mutex WT: 57 us | MPI mutex WT: 0 us | LB mutex WT: 109 us | Total L2 cache misses: 78648
+Thread[2][11]: Elapsed: 201638 us | Condition WT: 7857 us | Handlers mutex WT: 58 us | MPI mutex WT: 0 us | LB mutex WT: 69 us | Total L2 cache misses: 75957
+Thread[2][12]: Elapsed: 201603 us | Condition WT: 10465 us | Handlers mutex WT: 57 us | MPI mutex WT: 0 us | LB mutex WT: 58 us | Total L2 cache misses: 72879
+Thread[2][13]: Elapsed: 201606 us | Condition WT: 0 us | Handlers mutex WT: 3 us | MPI mutex WT: 4945 us | LB mutex WT: 9 us | Total L2 cache misses: 211382
+Finished writing logfile ./conv.clog2.
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 200 14 1
+Rank[1] | Elapsed time: 196903 us
+Thread[1][0]: Elapsed: 183802 us | Condition WT: 61 us | Handlers mutex WT: 36 us | MPI mutex WT: 686 us | LB mutex WT: 192 us | Total L2 cache misses: 219292
+Thread[1][1]: Elapsed: 183501 us | Condition WT: 8839 us | Handlers mutex WT: 69 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 97639
+Thread[1][2]: Elapsed: 183799 us | Condition WT: 7112 us | Handlers mutex WT: 72 us | MPI mutex WT: 0 us | LB mutex WT: 285 us | Total L2 cache misses: 99796
+Thread[1][3]: Elapsed: 183538 us | Condition WT: 5426 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 356 us | Total L2 cache misses: 99439
+Thread[1][4]: Elapsed: 183481 us | Condition WT: 3395 us | Handlers mutex WT: 80 us | MPI mutex WT: 0 us | LB mutex WT: 356 us | Total L2 cache misses: 102164
+Thread[1][5]: Elapsed: 183460 us | Condition WT: 1406 us | Handlers mutex WT: 70 us | MPI mutex WT: 0 us | LB mutex WT: 365 us | Total L2 cache misses: 99031
+Thread[1][6]: Elapsed: 183304 us | Condition WT: 0 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 326 us | Total L2 cache misses: 97490
+Thread[1][7]: Elapsed: 185228 us | Condition WT: 18929 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 266 us | Total L2 cache misses: 113963
+Thread[1][8]: Elapsed: 186923 us | Condition WT: 31680 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 19 us | Total L2 cache misses: 92522
+Thread[1][9]: Elapsed: 188465 us | Condition WT: 33845 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 8 us | Total L2 cache misses: 90115
+Thread[1][10]: Elapsed: 190106 us | Condition WT: 35846 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 27 us | Total L2 cache misses: 89278
+Thread[1][11]: Elapsed: 191685 us | Condition WT: 37697 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 3 us | Total L2 cache misses: 87507
+Thread[1][12]: Elapsed: 193315 us | Condition WT: 39725 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 1 us | Total L2 cache misses: 85283
+Thread[1][13]: Elapsed: 194970 us | Condition WT: 1006 us | Handlers mutex WT: 1 us | MPI mutex WT: 128 us | LB mutex WT: 0 us | Total L2 cache misses: 295048
+Rank[3] | Elapsed time: 197353 us
+Thread[3][0]: Elapsed: 177973 us | Condition WT: 0 us | Handlers mutex WT: 9 us | MPI mutex WT: 68 us | LB mutex WT: 32 us | Total L2 cache misses: 207079
+Thread[3][1]: Elapsed: 176696 us | Condition WT: 21819 us | Handlers mutex WT: 50 us | MPI mutex WT: 0 us | LB mutex WT: 66 us | Total L2 cache misses: 82213
+Thread[3][2]: Elapsed: 174683 us | Condition WT: 18658 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 84 us | Total L2 cache misses: 77944
+Thread[3][3]: Elapsed: 173070 us | Condition WT: 14310 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 144 us | Total L2 cache misses: 77227
+Thread[3][4]: Elapsed: 171339 us | Condition WT: 11102 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 187 us | Total L2 cache misses: 80820
+Thread[3][5]: Elapsed: 169620 us | Condition WT: 7958 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 202 us | Total L2 cache misses: 80734
+Thread[3][6]: Elapsed: 167637 us | Condition WT: 3477 us | Handlers mutex WT: 59 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 82585
+Thread[3][7]: Elapsed: 166623 us | Condition WT: 0 us | Handlers mutex WT: 50 us | MPI mutex WT: 0 us | LB mutex WT: 288 us | Total L2 cache misses: 88326
+Thread[3][8]: Elapsed: 166621 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 324 us | Total L2 cache misses: 85094
+Thread[3][9]: Elapsed: 166616 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 314 us | Total L2 cache misses: 80075
+Thread[3][10]: Elapsed: 166570 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 319 us | Total L2 cache misses: 78847
+Thread[3][11]: Elapsed: 166531 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 249 us | Total L2 cache misses: 77918
+Thread[3][12]: Elapsed: 166476 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 272 us | Total L2 cache misses: 79687
+Thread[3][13]: Elapsed: 166521 us | Condition WT: 0 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 192 us | Total L2 cache misses: 58275
+Rank[0] | Elapsed time: 198834 us
+Rank[0] | Elapsed time to read from disk: 2894 us
+Thread[0][0]: Elapsed: 168969 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 196 us | Total L2 cache misses: 68637
+Thread[0][1]: Elapsed: 168978 us | Condition WT: 0 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 85582
+Thread[0][2]: Elapsed: 168956 us | Condition WT: 0 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 288 us | Total L2 cache misses: 90810
+Thread[0][3]: Elapsed: 168973 us | Condition WT: 0 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 272 us | Total L2 cache misses: 88824
+Thread[0][4]: Elapsed: 168954 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 238 us | Total L2 cache misses: 88344
+Thread[0][5]: Elapsed: 168868 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 297 us | Total L2 cache misses: 88884
+Thread[0][6]: Elapsed: 168814 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 321 us | Total L2 cache misses: 85629
+Thread[0][7]: Elapsed: 169725 us | Condition WT: 2942 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 322 us | Total L2 cache misses: 101427
+Thread[0][8]: Elapsed: 170927 us | Condition WT: 8784 us | Handlers mutex WT: 67 us | MPI mutex WT: 0 us | LB mutex WT: 238 us | Total L2 cache misses: 94989
+Thread[0][9]: Elapsed: 172512 us | Condition WT: 15674 us | Handlers mutex WT: 61 us | MPI mutex WT: 0 us | LB mutex WT: 170 us | Total L2 cache misses: 87763
+Thread[0][10]: Elapsed: 174110 us | Condition WT: 23710 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 24 us | Total L2 cache misses: 82861
+Thread[0][11]: Elapsed: 175779 us | Condition WT: 25416 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 6 us | Total L2 cache misses: 81989
+Thread[0][12]: Elapsed: 177170 us | Condition WT: 26931 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 4 us | Total L2 cache misses: 81739
+Thread[0][13]: Elapsed: 179001 us | Condition WT: 0 us | Handlers mutex WT: 1 us | MPI mutex WT: 93 us | LB mutex WT: 0 us | Total L2 cache misses: 213160
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[2] | Elapsed time: 198830 us
+Thread[2][0]: Elapsed: 196808 us | Condition WT: 64 us | Handlers mutex WT: 21 us | MPI mutex WT: 4139 us | LB mutex WT: 138 us | Total L2 cache misses: 208567
+Thread[2][1]: Elapsed: 196793 us | Condition WT: 11731 us | Handlers mutex WT: 76 us | MPI mutex WT: 0 us | LB mutex WT: 174 us | Total L2 cache misses: 77392
+Thread[2][2]: Elapsed: 196776 us | Condition WT: 9624 us | Handlers mutex WT: 65 us | MPI mutex WT: 0 us | LB mutex WT: 207 us | Total L2 cache misses: 78664
+Thread[2][3]: Elapsed: 196750 us | Condition WT: 7554 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 215 us | Total L2 cache misses: 79468
+Thread[2][4]: Elapsed: 196731 us | Condition WT: 5130 us | Handlers mutex WT: 58 us | MPI mutex WT: 0 us | LB mutex WT: 273 us | Total L2 cache misses: 85436
+Thread[2][5]: Elapsed: 196665 us | Condition WT: 2894 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 303 us | Total L2 cache misses: 85813
+Thread[2][6]: Elapsed: 196647 us | Condition WT: 275 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 326 us | Total L2 cache misses: 85881
+Thread[2][7]: Elapsed: 196558 us | Condition WT: 191 us | Handlers mutex WT: 64 us | MPI mutex WT: 0 us | LB mutex WT: 422 us | Total L2 cache misses: 88514
+Thread[2][8]: Elapsed: 196564 us | Condition WT: 3060 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 249 us | Total L2 cache misses: 86025
+Thread[2][9]: Elapsed: 196540 us | Condition WT: 5978 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 295 us | Total L2 cache misses: 86839
+Thread[2][10]: Elapsed: 196531 us | Condition WT: 8294 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 198 us | Total L2 cache misses: 79878
+Thread[2][11]: Elapsed: 196491 us | Condition WT: 10495 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 227 us | Total L2 cache misses: 81389
+Thread[2][12]: Elapsed: 196480 us | Condition WT: 12631 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 150 us | Total L2 cache misses: 78137
+Thread[2][13]: Elapsed: 196489 us | Condition WT: 64 us | Handlers mutex WT: 11 us | MPI mutex WT: 8132 us | LB mutex WT: 160 us | Total L2 cache misses: 247304
+Finished writing logfile ./conv.clog2.
+
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 200 16 1
+Rank[1] | Elapsed time: 177129 us
+Thread[1][0]: Elapsed: 163807 us | Condition WT: 61 us | Handlers mutex WT: 26 us | MPI mutex WT: 825 us | LB mutex WT: 121 us | Total L2 cache misses: 195716
+Thread[1][1]: Elapsed: 164056 us | Condition WT: 11665 us | Handlers mutex WT: 89 us | MPI mutex WT: 0 us | LB mutex WT: 161 us | Total L2 cache misses: 79116
+Thread[1][2]: Elapsed: 163502 us | Condition WT: 10112 us | Handlers mutex WT: 64 us | MPI mutex WT: 0 us | LB mutex WT: 217 us | Total L2 cache misses: 80082
+Thread[1][3]: Elapsed: 163946 us | Condition WT: 8761 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 245 us | Total L2 cache misses: 85884
+Thread[1][4]: Elapsed: 163655 us | Condition WT: 7340 us | Handlers mutex WT: 59 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 83712
+Thread[1][5]: Elapsed: 163291 us | Condition WT: 5402 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 304 us | Total L2 cache misses: 90447
+Thread[1][6]: Elapsed: 163246 us | Condition WT: 3741 us | Handlers mutex WT: 60 us | MPI mutex WT: 0 us | LB mutex WT: 291 us | Total L2 cache misses: 89450
+Thread[1][7]: Elapsed: 163265 us | Condition WT: 0 us | Handlers mutex WT: 65 us | MPI mutex WT: 0 us | LB mutex WT: 429 us | Total L2 cache misses: 105588
+Thread[1][8]: Elapsed: 164947 us | Condition WT: 21770 us | Handlers mutex WT: 78 us | MPI mutex WT: 0 us | LB mutex WT: 159 us | Total L2 cache misses: 80741
+Thread[1][9]: Elapsed: 166291 us | Condition WT: 30364 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 28 us | Total L2 cache misses: 80086
+Thread[1][10]: Elapsed: 167755 us | Condition WT: 31854 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 11 us | Total L2 cache misses: 79866
+Thread[1][11]: Elapsed: 169147 us | Condition WT: 33533 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 15 us | Total L2 cache misses: 78687
+Thread[1][12]: Elapsed: 170549 us | Condition WT: 35244 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 10 us | Total L2 cache misses: 75117
+Thread[1][13]: Elapsed: 171886 us | Condition WT: 36743 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 4 us | Total L2 cache misses: 75308
+Thread[1][14]: Elapsed: 173319 us | Condition WT: 37872 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 70744
+Thread[1][15]: Elapsed: 174736 us | Condition WT: 1683 us | Handlers mutex WT: 1 us | MPI mutex WT: 129 us | LB mutex WT: 0 us | Total L2 cache misses: 297916
+Rank[3] | Elapsed time: 177647 us
+Thread[3][0]: Elapsed: 159117 us | Condition WT: 0 us | Handlers mutex WT: 3 us | MPI mutex WT: 76 us | LB mutex WT: 34 us | Total L2 cache misses: 186764
+Thread[3][1]: Elapsed: 157603 us | Condition WT: 19806 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 68 us | Total L2 cache misses: 66147
+Thread[3][2]: Elapsed: 155728 us | Condition WT: 17494 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 68 us | Total L2 cache misses: 65390
+Thread[3][3]: Elapsed: 154302 us | Condition WT: 15078 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 55 us | Total L2 cache misses: 67595
+Thread[3][4]: Elapsed: 153244 us | Condition WT: 12029 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 105 us | Total L2 cache misses: 66160
+Thread[3][5]: Elapsed: 151380 us | Condition WT: 8670 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 167 us | Total L2 cache misses: 68353
+Thread[3][6]: Elapsed: 149950 us | Condition WT: 5721 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 206 us | Total L2 cache misses: 70957
+Thread[3][7]: Elapsed: 148471 us | Condition WT: 2631 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 189 us | Total L2 cache misses: 70519
+Thread[3][8]: Elapsed: 147454 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 242 us | Total L2 cache misses: 61427
+Thread[3][9]: Elapsed: 147439 us | Condition WT: 0 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 273 us | Total L2 cache misses: 63997
+Thread[3][10]: Elapsed: 147390 us | Condition WT: 0 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 209 us | Total L2 cache misses: 60845
+Thread[3][11]: Elapsed: 146875 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 221 us | Total L2 cache misses: 65440
+Thread[3][12]: Elapsed: 146889 us | Condition WT: 0 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 262 us | Total L2 cache misses: 62937
+Thread[3][13]: Elapsed: 146825 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 241 us | Total L2 cache misses: 65554
+Thread[3][14]: Elapsed: 146841 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 244 us | Total L2 cache misses: 59772
+Thread[3][15]: Elapsed: 146853 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 136 us | Total L2 cache misses: 40574
+Rank[0] | Elapsed time: 178902 us
+Rank[0] | Elapsed time to read from disk: 2595 us
+Thread[0][0]: Elapsed: 149591 us | Condition WT: 0 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 130 us | Total L2 cache misses: 55840
+Thread[0][1]: Elapsed: 149593 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 229 us | Total L2 cache misses: 71144
+Thread[0][2]: Elapsed: 149594 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 258 us | Total L2 cache misses: 75697
+Thread[0][3]: Elapsed: 149574 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 290 us | Total L2 cache misses: 73244
+Thread[0][4]: Elapsed: 149576 us | Condition WT: 0 us | Handlers mutex WT: 87 us | MPI mutex WT: 0 us | LB mutex WT: 296 us | Total L2 cache misses: 74772
+Thread[0][5]: Elapsed: 148706 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 242 us | Total L2 cache misses: 73739
+Thread[0][6]: Elapsed: 148648 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 271 us | Total L2 cache misses: 74842
+Thread[0][7]: Elapsed: 148577 us | Condition WT: 0 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 372 us | Total L2 cache misses: 85438
+Thread[0][8]: Elapsed: 149733 us | Condition WT: 5975 us | Handlers mutex WT: 60 us | MPI mutex WT: 0 us | LB mutex WT: 214 us | Total L2 cache misses: 75901
+Thread[0][9]: Elapsed: 150856 us | Condition WT: 10783 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 146 us | Total L2 cache misses: 69809
+Thread[0][10]: Elapsed: 152585 us | Condition WT: 18199 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 41 us | Total L2 cache misses: 70807
+Thread[0][11]: Elapsed: 153884 us | Condition WT: 21200 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 8 us | Total L2 cache misses: 67652
+Thread[0][12]: Elapsed: 155109 us | Condition WT: 22712 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 32 us | Total L2 cache misses: 68285
+Thread[0][13]: Elapsed: 156518 us | Condition WT: 24121 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 21 us | Total L2 cache misses: 69402
+Thread[0][14]: Elapsed: 157889 us | Condition WT: 25270 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 18 us | Total L2 cache misses: 69297
+Thread[0][15]: Elapsed: 159322 us | Condition WT: 0 us | Handlers mutex WT: 0 us | MPI mutex WT: 91 us | LB mutex WT: 1 us | Total L2 cache misses: 216207
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[2] | Elapsed time: 178894 us
+Thread[2][0]: Elapsed: 176973 us | Condition WT: 63 us | Handlers mutex WT: 13 us | MPI mutex WT: 4533 us | LB mutex WT: 81 us | Total L2 cache misses: 195634
+Thread[2][1]: Elapsed: 176963 us | Condition WT: 14369 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 96 us | Total L2 cache misses: 65529
+Thread[2][2]: Elapsed: 176971 us | Condition WT: 12088 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 176 us | Total L2 cache misses: 72179
+Thread[2][3]: Elapsed: 176986 us | Condition WT: 10242 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 215 us | Total L2 cache misses: 75146
+Thread[2][4]: Elapsed: 176955 us | Condition WT: 8311 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 231 us | Total L2 cache misses: 71403
+Thread[2][5]: Elapsed: 176886 us | Condition WT: 5722 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 311 us | Total L2 cache misses: 75668
+Thread[2][6]: Elapsed: 176642 us | Condition WT: 3034 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 306 us | Total L2 cache misses: 75241
+Thread[2][7]: Elapsed: 176700 us | Condition WT: 363 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 280 us | Total L2 cache misses: 67740
+Thread[2][8]: Elapsed: 176679 us | Condition WT: 489 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 261 us | Total L2 cache misses: 66554
+Thread[2][9]: Elapsed: 176612 us | Condition WT: 3033 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 237 us | Total L2 cache misses: 67411
+Thread[2][10]: Elapsed: 176613 us | Condition WT: 4822 us | Handlers mutex WT: 54 us | MPI mutex WT: 0 us | LB mutex WT: 219 us | Total L2 cache misses: 67330
+Thread[2][11]: Elapsed: 176546 us | Condition WT: 6319 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 200 us | Total L2 cache misses: 63840
+Thread[2][12]: Elapsed: 176492 us | Condition WT: 8090 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 192 us | Total L2 cache misses: 67261
+Thread[2][13]: Elapsed: 176513 us | Condition WT: 10611 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 162 us | Total L2 cache misses: 62801
+Thread[2][14]: Elapsed: 176481 us | Condition WT: 12877 us | Handlers mutex WT: 61 us | MPI mutex WT: 0 us | LB mutex WT: 129 us | Total L2 cache misses: 65262
+Thread[2][15]: Elapsed: 176462 us | Condition WT: 124 us | Handlers mutex WT: 10 us | MPI mutex WT: 9627 us | LB mutex WT: 82 us | Total L2 cache misses: 242684
+Finished writing logfile ./conv.clog2.
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 200 16 1
+Rank[1] | Elapsed time: 191183 us
+Thread[1][0] : Elapsed: 177855 us | Condition WT: 62 us | Handlers mutex WT: 35 us | MPI mutex WT: 1066 us | LB mutex WT: 148 us | Total L2 cache misses: 199370
+Thread[1][1] : Elapsed: 177932 us | Condition WT: 12640 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 221 us | Total L2 cache misses: 80620
+Thread[1][2] : Elapsed: 177842 us | Condition WT: 11000 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 194 us | Total L2 cache misses: 84436
+Thread[1][3] : Elapsed: 177895 us | Condition WT: 8463 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 210 us | Total L2 cache misses: 86603
+Thread[1][4] : Elapsed: 177676 us | Condition WT: 6511 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 243 us | Total L2 cache misses: 87557
+Thread[1][5] : Elapsed: 177350 us | Condition WT: 4863 us | Handlers mutex WT: 59 us | MPI mutex WT: 0 us | LB mutex WT: 298 us | Total L2 cache misses: 89606
+Thread[1][6] : Elapsed: 177451 us | Condition WT: 3005 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 283 us | Total L2 cache misses: 89224
+Thread[1][7] : Elapsed: 177612 us | Condition WT: 0 us | Handlers mutex WT: 65 us | MPI mutex WT: 0 us | LB mutex WT: 387 us | Total L2 cache misses: 104683
+Thread[1][8] : Elapsed: 178940 us | Condition WT: 41187 us | Handlers mutex WT: 58 us | MPI mutex WT: 0 us | LB mutex WT: 47 us | Total L2 cache misses: 80307
+Thread[1][9] : Elapsed: 180331 us | Condition WT: 44934 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 6 us | Total L2 cache misses: 78352
+Thread[1][10]: Elapsed: 181784 us | Condition WT: 46422 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 16 us | Total L2 cache misses: 80211
+Thread[1][11]: Elapsed: 183147 us | Condition WT: 48384 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 6 us | Total L2 cache misses: 74093
+Thread[1][12]: Elapsed: 184554 us | Condition WT: 49861 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 4 us | Total L2 cache misses: 73671
+Thread[1][13]: Elapsed: 185939 us | Condition WT: 51445 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 1 us | Total L2 cache misses: 74960
+Thread[1][14]: Elapsed: 187288 us | Condition WT: 52378 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 73443
+Thread[1][15]: Elapsed: 188704 us | Condition WT: 1997 us | Handlers mutex WT: 0 us | MPI mutex WT: 126 us | LB mutex WT: 0 us | Total L2 cache misses: 299982
+Rank[3] | Elapsed time: 191613 us
+Thread[3][0]: Elapsed: 172574 us | Condition WT: 0 us | Handlers mutex WT: 2 us | MPI mutex WT: 85 us | LB mutex WT: 13 us | Total L2 cache misses: 192794
+Thread[3][1]: Elapsed: 171354 us | Condition WT: 35103 us | Handlers mutex WT: 99 us | MPI mutex WT: 0 us | LB mutex WT: 32 us | Total L2 cache misses: 75529
+Thread[3][2]: Elapsed: 170242 us | Condition WT: 33056 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 24 us | Total L2 cache misses: 70156
+Thread[3][3]: Elapsed: 169127 us | Condition WT: 31982 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 30 us | Total L2 cache misses: 72794
+Thread[3][4]: Elapsed: 166963 us | Condition WT: 29561 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 38 us | Total L2 cache misses: 70473
+Thread[3][5]: Elapsed: 165547 us | Condition WT: 27877 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 55 us | Total L2 cache misses: 74861
+Thread[3][6]: Elapsed: 164064 us | Condition WT: 25774 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 61 us | Total L2 cache misses: 74600
+Thread[3][7]: Elapsed: 162624 us | Condition WT: 23606 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 57 us | Total L2 cache misses: 72358
+Thread[3][8]: Elapsed: 160343 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 226 us | Total L2 cache misses: 68895
+Thread[3][9]: Elapsed: 160299 us | Condition WT: 0 us | Handlers mutex WT: 34 us | MPI mutex WT: 0 us | LB mutex WT: 305 us | Total L2 cache misses: 75049
+Thread[3][10]: Elapsed: 160195 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 274 us | Total L2 cache misses: 71284
+Thread[3][11]: Elapsed: 160172 us | Condition WT: 0 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 248 us | Total L2 cache misses: 71830
+Thread[3][12]: Elapsed: 160162 us | Condition WT: 0 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 228 us | Total L2 cache misses: 72108
+Thread[3][13]: Elapsed: 160124 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 200 us | Total L2 cache misses: 70422
+Thread[3][14]: Elapsed: 160141 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 225 us | Total L2 cache misses: 69859
+Thread[3][15]: Elapsed: 160116 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 153 us | Total L2 cache misses: 61378
+Rank[0] | Elapsed time: 192930 us
+Rank[0] | Elapsed time to read from disk: 2240 us
+Thread[0][0]: Elapsed: 163638 us | Condition WT: 0 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 193 us | Total L2 cache misses: 66639
+Thread[0][1]: Elapsed: 163575 us | Condition WT: 0 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 277 us | Total L2 cache misses: 77949
+Thread[0][2]: Elapsed: 163603 us | Condition WT: 0 us | Handlers mutex WT: 58 us | MPI mutex WT: 0 us | LB mutex WT: 280 us | Total L2 cache misses: 84321
+Thread[0][3]: Elapsed: 163044 us | Condition WT: 0 us | Handlers mutex WT: 57 us | MPI mutex WT: 0 us | LB mutex WT: 281 us | Total L2 cache misses: 83693
+Thread[0][4]: Elapsed: 163065 us | Condition WT: 0 us | Handlers mutex WT: 61 us | MPI mutex WT: 0 us | LB mutex WT: 242 us | Total L2 cache misses: 85071
+Thread[0][5]: Elapsed: 163083 us | Condition WT: 0 us | Handlers mutex WT: 59 us | MPI mutex WT: 0 us | LB mutex WT: 318 us | Total L2 cache misses: 83619
+Thread[0][6]: Elapsed: 162979 us | Condition WT: 0 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 296 us | Total L2 cache misses: 86789
+Thread[0][7]: Elapsed: 162956 us | Condition WT: 0 us | Handlers mutex WT: 69 us | MPI mutex WT: 0 us | LB mutex WT: 369 us | Total L2 cache misses: 103081
+Thread[0][8]: Elapsed: 164646 us | Condition WT: 28082 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 75 us | Total L2 cache misses: 76260
+Thread[0][9]: Elapsed: 165884 us | Condition WT: 32423 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 28 us | Total L2 cache misses: 71054
+Thread[0][10]: Elapsed: 166917 us | Condition WT: 34138 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 33 us | Total L2 cache misses: 73610
+Thread[0][11]: Elapsed: 168203 us | Condition WT: 35566 us | Handlers mutex WT: 51 us | MPI mutex WT: 0 us | LB mutex WT: 29 us | Total L2 cache misses: 70561
+Thread[0][12]: Elapsed: 169819 us | Condition WT: 37559 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 24 us | Total L2 cache misses: 67776
+Thread[0][13]: Elapsed: 171202 us | Condition WT: 39068 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 3 us | Total L2 cache misses: 71962
+Thread[0][14]: Elapsed: 172498 us | Condition WT: 39906 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 73688
+Thread[0][15]: Elapsed: 173793 us | Condition WT: 0 us | Handlers mutex WT: 1 us | MPI mutex WT: 107 us | LB mutex WT: 0 us | Total L2 cache misses: 215336
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[2] | Elapsed time: 192920 us
+Thread[2][0]: Elapsed: 190265 us | Condition WT: 64 us | Handlers mutex WT: 48 us | MPI mutex WT: 837 us | LB mutex WT: 271 us | Total L2 cache misses: 251586
+Thread[2][1]: Elapsed: 190259 us | Condition WT: 13296 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 324 us | Total L2 cache misses: 74709
+Thread[2][2]: Elapsed: 190233 us | Condition WT: 11516 us | Handlers mutex WT: 54 us | MPI mutex WT: 0 us | LB mutex WT: 255 us | Total L2 cache misses: 76816
+Thread[2][3]: Elapsed: 190228 us | Condition WT: 8353 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 292 us | Total L2 cache misses: 80713
+Thread[2][4]: Elapsed: 190236 us | Condition WT: 4995 us | Handlers mutex WT: 80 us | MPI mutex WT: 0 us | LB mutex WT: 319 us | Total L2 cache misses: 86014
+Thread[2][5]: Elapsed: 190173 us | Condition WT: 2020 us | Handlers mutex WT: 59 us | MPI mutex WT: 0 us | LB mutex WT: 361 us | Total L2 cache misses: 80125
+Thread[2][6]: Elapsed: 190069 us | Condition WT: 22116 us | Handlers mutex WT: 63 us | MPI mutex WT: 0 us | LB mutex WT: 213 us | Total L2 cache misses: 77994
+Thread[2][7]: Elapsed: 190047 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 116 us | Total L2 cache misses: 48454
+Thread[2][8]: Elapsed: 190034 us | Condition WT: 0 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 146 us | Total L2 cache misses: 48935
+Thread[2][9]: Elapsed: 189960 us | Condition WT: 0 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 150 us | Total L2 cache misses: 48805
+Thread[2][10]: Elapsed: 189954 us | Condition WT: 258 us | Handlers mutex WT: 72 us | MPI mutex WT: 0 us | LB mutex WT: 120 us | Total L2 cache misses: 55891
+Thread[2][11]: Elapsed: 189936 us | Condition WT: 2488 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 81 us | Total L2 cache misses: 53553
+Thread[2][12]: Elapsed: 189923 us | Condition WT: 4994 us | Handlers mutex WT: 54 us | MPI mutex WT: 0 us | LB mutex WT: 74 us | Total L2 cache misses: 51868
+Thread[2][13]: Elapsed: 189905 us | Condition WT: 7753 us | Handlers mutex WT: 85 us | MPI mutex WT: 0 us | LB mutex WT: 51 us | Total L2 cache misses: 45560
+Thread[2][14]: Elapsed: 189837 us | Condition WT: 10955 us | Handlers mutex WT: 1 us | MPI mutex WT: 0 us | LB mutex WT: 14 us | Total L2 cache misses: 38502
+Thread[2][15]: Elapsed: 189844 us | Condition WT: 17076 us | Handlers mutex WT: 41 us | MPI mutex WT: 13350 us | LB mutex WT: 24 us | Total L2 cache misses: 248664
+Finished writing logfile ./conv.clog2.
+
+
+
+
+
+
+
+// HYPER THREADING
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 200 32 1
+Rank[0] | Elapsed time: 234514 us
+Rank[0] | Elapsed time to read from disk: 2248 us
+Thread[0][0]: Elapsed: 220343 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 320 us | Total L2 cache misses: 85097
+Thread[0][1]: Elapsed: 220552 us | Condition WT: 0 us | Handlers mutex WT: 7 us | MPI mutex WT: 0 us | LB mutex WT: 472 us | Total L2 cache misses: 89439
+Thread[0][2]: Elapsed: 220754 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 442 us | Total L2 cache misses: 90595
+Thread[0][3]: Elapsed: 220510 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 390 us | Total L2 cache misses: 88448
+Thread[0][4]: Elapsed: 220460 us | Condition WT: 0 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 377 us | Total L2 cache misses: 90273
+Thread[0][5]: Elapsed: 220763 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 432 us | Total L2 cache misses: 90647
+Thread[0][6]: Elapsed: 220169 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 413 us | Total L2 cache misses: 90440
+Thread[0][7]: Elapsed: 220063 us | Condition WT: 0 us | Handlers mutex WT: 14 us | MPI mutex WT: 0 us | LB mutex WT: 407 us | Total L2 cache misses: 90755
+Thread[0][8]: Elapsed: 220398 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 471 us | Total L2 cache misses: 90537
+Thread[0][9]: Elapsed: 220585 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 579 us | Total L2 cache misses: 90644
+Thread[0][10]: Elapsed: 220391 us | Condition WT: 0 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 482 us | Total L2 cache misses: 91891
+Thread[0][11]: Elapsed: 220632 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 396 us | Total L2 cache misses: 90443
+Thread[0][12]: Elapsed: 220293 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 538 us | Total L2 cache misses: 104369
+Thread[0][13]: Elapsed: 219209 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 576 us | Total L2 cache misses: 99001
+Thread[0][14]: Elapsed: 219161 us | Condition WT: 170 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 537 us | Total L2 cache misses: 96220
+Thread[0][15]: Elapsed: 218121 us | Condition WT: 0 us | Handlers mutex WT: 12 us | MPI mutex WT: 0 us | LB mutex WT: 494 us | Total L2 cache misses: 91070
+Thread[0][16]: Elapsed: 216087 us | Condition WT: 0 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 329 us | Total L2 cache misses: 81234
+Thread[0][17]: Elapsed: 217443 us | Condition WT: 0 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 408 us | Total L2 cache misses: 88991
+Thread[0][18]: Elapsed: 216175 us | Condition WT: 0 us | Handlers mutex WT: 11 us | MPI mutex WT: 0 us | LB mutex WT: 378 us | Total L2 cache misses: 84145
+Thread[0][19]: Elapsed: 217552 us | Condition WT: 1 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 383 us | Total L2 cache misses: 92234
+Thread[0][20]: Elapsed: 216229 us | Condition WT: 0 us | Handlers mutex WT: 14 us | MPI mutex WT: 0 us | LB mutex WT: 316 us | Total L2 cache misses: 82148
+Thread[0][21]: Elapsed: 217627 us | Condition WT: 1 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 453 us | Total L2 cache misses: 89815
+Thread[0][22]: Elapsed: 216300 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 390 us | Total L2 cache misses: 84475
+Thread[0][23]: Elapsed: 217785 us | Condition WT: 97 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 398 us | Total L2 cache misses: 90822
+Thread[0][24]: Elapsed: 216559 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 377 us | Total L2 cache misses: 87026
+Thread[0][25]: Elapsed: 217839 us | Condition WT: 1 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 544 us | Total L2 cache misses: 90958
+Thread[0][26]: Elapsed: 216665 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 460 us | Total L2 cache misses: 87918
+Thread[0][27]: Elapsed: 218043 us | Condition WT: 34 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 531 us | Total L2 cache misses: 90770
+Thread[0][28]: Elapsed: 216974 us | Condition WT: 11160 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 80 us | Total L2 cache misses: 80067
+Thread[0][29]: Elapsed: 221092 us | Condition WT: 17329 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 27 us | Total L2 cache misses: 91774
+Thread[0][30]: Elapsed: 220657 us | Condition WT: 18114 us | Handlers mutex WT: 67 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 93234
+Thread[0][31]: Elapsed: 224475 us | Condition WT: 55 us | Handlers mutex WT: 0 us | MPI mutex WT: 103 us | LB mutex WT: 0 us | Total L2 cache misses: 272390
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[1] | Elapsed time: 234518 us
+Thread[1][0]: Elapsed: 230884 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 461 us | Total L2 cache misses: 304488
+Thread[1][1]: Elapsed: 224563 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 443 us | Total L2 cache misses: 87123
+Thread[1][2]: Elapsed: 226159 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 387 us | Total L2 cache misses: 84370
+Thread[1][3]: Elapsed: 226432 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 473 us | Total L2 cache misses: 88134
+Thread[1][4]: Elapsed: 226006 us | Condition WT: 0 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 427 us | Total L2 cache misses: 86866
+Thread[1][5]: Elapsed: 224818 us | Condition WT: 0 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 467 us | Total L2 cache misses: 89077
+Thread[1][6]: Elapsed: 225606 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 424 us | Total L2 cache misses: 87294
+Thread[1][7]: Elapsed: 225240 us | Condition WT: 864 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 418 us | Total L2 cache misses: 90632
+Thread[1][8]: Elapsed: 224593 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 538 us | Total L2 cache misses: 89179
+Thread[1][9]: Elapsed: 223545 us | Condition WT: 0 us | Handlers mutex WT: 29 us | MPI mutex WT: 0 us | LB mutex WT: 523 us | Total L2 cache misses: 87629
+Thread[1][10]: Elapsed: 223961 us | Condition WT: 0 us | Handlers mutex WT: 27 us | MPI mutex WT: 0 us | LB mutex WT: 646 us | Total L2 cache misses: 88485
+Thread[1][11]: Elapsed: 224016 us | Condition WT: 49 us | Handlers mutex WT: 15 us | MPI mutex WT: 0 us | LB mutex WT: 625 us | Total L2 cache misses: 89206
+Thread[1][12]: Elapsed: 221582 us | Condition WT: 0 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 593 us | Total L2 cache misses: 89131
+Thread[1][13]: Elapsed: 221676 us | Condition WT: 0 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 459 us | Total L2 cache misses: 86397
+Thread[1][14]: Elapsed: 221248 us | Condition WT: 0 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 619 us | Total L2 cache misses: 84403
+Thread[1][15]: Elapsed: 221483 us | Condition WT: 0 us | Handlers mutex WT: 12 us | MPI mutex WT: 0 us | LB mutex WT: 509 us | Total L2 cache misses: 84813
+Thread[1][16]: Elapsed: 221438 us | Condition WT: 2768 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 402 us | Total L2 cache misses: 93987
+Thread[1][17]: Elapsed: 219645 us | Condition WT: 0 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 336 us | Total L2 cache misses: 79744
+Thread[1][18]: Elapsed: 219635 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 378 us | Total L2 cache misses: 80434
+Thread[1][19]: Elapsed: 217295 us | Condition WT: 0 us | Handlers mutex WT: 9 us | MPI mutex WT: 0 us | LB mutex WT: 389 us | Total L2 cache misses: 79993
+Thread[1][20]: Elapsed: 217309 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 350 us | Total L2 cache misses: 80585
+Thread[1][21]: Elapsed: 215747 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 422 us | Total L2 cache misses: 78386
+Thread[1][22]: Elapsed: 219803 us | Condition WT: 0 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 417 us | Total L2 cache misses: 85060
+Thread[1][23]: Elapsed: 215600 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 385 us | Total L2 cache misses: 81248
+Thread[1][24]: Elapsed: 215533 us | Condition WT: 0 us | Handlers mutex WT: 10 us | MPI mutex WT: 0 us | LB mutex WT: 444 us | Total L2 cache misses: 85010
+Thread[1][25]: Elapsed: 215376 us | Condition WT: 0 us | Handlers mutex WT: 5 us | MPI mutex WT: 0 us | LB mutex WT: 425 us | Total L2 cache misses: 77942
+Thread[1][26]: Elapsed: 215458 us | Condition WT: 0 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 420 us | Total L2 cache misses: 79381
+Thread[1][27]: Elapsed: 215359 us | Condition WT: 0 us | Handlers mutex WT: 11 us | MPI mutex WT: 0 us | LB mutex WT: 470 us | Total L2 cache misses: 80064
+Thread[1][28]: Elapsed: 215258 us | Condition WT: 0 us | Handlers mutex WT: 8 us | MPI mutex WT: 0 us | LB mutex WT: 403 us | Total L2 cache misses: 81728
+Thread[1][29]: Elapsed: 215287 us | Condition WT: 0 us | Handlers mutex WT: 14 us | MPI mutex WT: 0 us | LB mutex WT: 463 us | Total L2 cache misses: 76865
+Thread[1][30]: Elapsed: 215157 us | Condition WT: 0 us | Handlers mutex WT: 11 us | MPI mutex WT: 0 us | LB mutex WT: 319 us | Total L2 cache misses: 77734
+Thread[1][31]: Elapsed: 215496 us | Condition WT: 0 us | Handlers mutex WT: 7 us | MPI mutex WT: 0 us | LB mutex WT: 383 us | Total L2 cache misses: 68718
+Finished writing logfile ./conv.clog2.
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 200 32 1
+Rank[0] | Elapsed time: 232569 us
+Rank[0] | Elapsed time to read from disk: 2788 us
+Thread[0][0]: Elapsed: 223755 us | Condition WT: 0 us | Handlers mutex WT: 9 us | MPI mutex WT: 0 us | LB mutex WT: 365 us | Total L2 cache misses: 81281
+Thread[0][1]: Elapsed: 223516 us | Condition WT: 0 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 381 us | Total L2 cache misses: 84780
+Thread[0][2]: Elapsed: 222452 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 461 us | Total L2 cache misses: 90050
+Thread[0][3]: Elapsed: 222159 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 433 us | Total L2 cache misses: 88251
+Thread[0][4]: Elapsed: 221866 us | Condition WT: 0 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 428 us | Total L2 cache misses: 88074
+Thread[0][5]: Elapsed: 222328 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 459 us | Total L2 cache misses: 87906
+Thread[0][6]: Elapsed: 221885 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 483 us | Total L2 cache misses: 90325
+Thread[0][7]: Elapsed: 221709 us | Condition WT: 0 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 455 us | Total L2 cache misses: 89732
+Thread[0][8]: Elapsed: 221578 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 434 us | Total L2 cache misses: 93274
+Thread[0][9]: Elapsed: 220621 us | Condition WT: 0 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 561 us | Total L2 cache misses: 92920
+Thread[0][10]: Elapsed: 220723 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 418 us | Total L2 cache misses: 90391
+Thread[0][11]: Elapsed: 219407 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 494 us | Total L2 cache misses: 93027
+Thread[0][12]: Elapsed: 220466 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 424 us | Total L2 cache misses: 88795
+Thread[0][13]: Elapsed: 219336 us | Condition WT: 2056 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 572 us | Total L2 cache misses: 93670
+Thread[0][14]: Elapsed: 216194 us | Condition WT: 0 us | Handlers mutex WT: 15 us | MPI mutex WT: 0 us | LB mutex WT: 485 us | Total L2 cache misses: 98552
+Thread[0][15]: Elapsed: 216294 us | Condition WT: 0 us | Handlers mutex WT: 14 us | MPI mutex WT: 0 us | LB mutex WT: 400 us | Total L2 cache misses: 91644
+Thread[0][16]: Elapsed: 218557 us | Condition WT: 712 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 381 us | Total L2 cache misses: 83823
+Thread[0][17]: Elapsed: 216375 us | Condition WT: 0 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 394 us | Total L2 cache misses: 81973
+Thread[0][18]: Elapsed: 218625 us | Condition WT: 60 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 407 us | Total L2 cache misses: 98732
+Thread[0][19]: Elapsed: 216453 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 356 us | Total L2 cache misses: 85892
+Thread[0][20]: Elapsed: 218702 us | Condition WT: 53 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 449 us | Total L2 cache misses: 98426
+Thread[0][21]: Elapsed: 216524 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 372 us | Total L2 cache misses: 86985
+Thread[0][22]: Elapsed: 218837 us | Condition WT: 288 us | Handlers mutex WT: 20 us | MPI mutex WT: 0 us | LB mutex WT: 380 us | Total L2 cache misses: 90819
+Thread[0][23]: Elapsed: 216874 us | Condition WT: 0 us | Handlers mutex WT: 13 us | MPI mutex WT: 0 us | LB mutex WT: 422 us | Total L2 cache misses: 83662
+Thread[0][24]: Elapsed: 219218 us | Condition WT: 1 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 410 us | Total L2 cache misses: 107352
+Thread[0][25]: Elapsed: 216798 us | Condition WT: 0 us | Handlers mutex WT: 15 us | MPI mutex WT: 0 us | LB mutex WT: 485 us | Total L2 cache misses: 85140
+Thread[0][26]: Elapsed: 219143 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 532 us | Total L2 cache misses: 110830
+Thread[0][27]: Elapsed: 216731 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 632 us | Total L2 cache misses: 86637
+Thread[0][28]: Elapsed: 219033 us | Condition WT: 1545 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 381 us | Total L2 cache misses: 99907
+Thread[0][29]: Elapsed: 218962 us | Condition WT: 14178 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 70 us | Total L2 cache misses: 80883
+Thread[0][30]: Elapsed: 222378 us | Condition WT: 18955 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 20 us | Total L2 cache misses: 89211
+Thread[0][31]: Elapsed: 224871 us | Condition WT: 0 us | Handlers mutex WT: 0 us | MPI mutex WT: 84 us | LB mutex WT: 3 us | Total L2 cache misses: 273265
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[1] | Elapsed time: 232568 us
+Thread[1][0]: Elapsed: 230196 us | Condition WT: 0 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 358 us | Total L2 cache misses: 309018
+Thread[1][1]: Elapsed: 230255 us | Condition WT: 0 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 467 us | Total L2 cache misses: 89636
+Thread[1][2]: Elapsed: 225644 us | Condition WT: 0 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 459 us | Total L2 cache misses: 89531
+Thread[1][3]: Elapsed: 225880 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 525 us | Total L2 cache misses: 91178
+Thread[1][4]: Elapsed: 226356 us | Condition WT: 0 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 525 us | Total L2 cache misses: 88782
+Thread[1][5]: Elapsed: 225862 us | Condition WT: 0 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 406 us | Total L2 cache misses: 87427
+Thread[1][6]: Elapsed: 225635 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 541 us | Total L2 cache misses: 93435
+Thread[1][7]: Elapsed: 225237 us | Condition WT: 2106 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 433 us | Total L2 cache misses: 92132
+Thread[1][8]: Elapsed: 223324 us | Condition WT: 0 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 489 us | Total L2 cache misses: 89625
+Thread[1][9]: Elapsed: 224067 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 604 us | Total L2 cache misses: 88363
+Thread[1][10]: Elapsed: 223763 us | Condition WT: 0 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 536 us | Total L2 cache misses: 87975
+Thread[1][11]: Elapsed: 223618 us | Condition WT: 1036 us | Handlers mutex WT: 36 us | MPI mutex WT: 0 us | LB mutex WT: 417 us | Total L2 cache misses: 88298
+Thread[1][12]: Elapsed: 221606 us | Condition WT: 0 us | Handlers mutex WT: 30 us | MPI mutex WT: 0 us | LB mutex WT: 585 us | Total L2 cache misses: 91201
+Thread[1][13]: Elapsed: 221982 us | Condition WT: 678 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 569 us | Total L2 cache misses: 88899
+Thread[1][14]: Elapsed: 223656 us | Condition WT: 1072 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 524 us | Total L2 cache misses: 89355
+Thread[1][15]: Elapsed: 221579 us | Condition WT: 0 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 498 us | Total L2 cache misses: 87575
+Thread[1][16]: Elapsed: 221946 us | Condition WT: 3572 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 336 us | Total L2 cache misses: 101722
+Thread[1][17]: Elapsed: 221382 us | Condition WT: 2914 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 388 us | Total L2 cache misses: 85430
+Thread[1][18]: Elapsed: 220595 us | Condition WT: 4934 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 329 us | Total L2 cache misses: 78849
+Thread[1][19]: Elapsed: 218315 us | Condition WT: 0 us | Handlers mutex WT: 6 us | MPI mutex WT: 0 us | LB mutex WT: 347 us | Total L2 cache misses: 78940
+Thread[1][20]: Elapsed: 220453 us | Condition WT: 249 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 310 us | Total L2 cache misses: 78322
+Thread[1][21]: Elapsed: 213187 us | Condition WT: 0 us | Handlers mutex WT: 6 us | MPI mutex WT: 0 us | LB mutex WT: 303 us | Total L2 cache misses: 79917
+Thread[1][22]: Elapsed: 213215 us | Condition WT: 0 us | Handlers mutex WT: 7 us | MPI mutex WT: 0 us | LB mutex WT: 335 us | Total L2 cache misses: 78728
+Thread[1][23]: Elapsed: 218236 us | Condition WT: 0 us | Handlers mutex WT: 13 us | MPI mutex WT: 0 us | LB mutex WT: 341 us | Total L2 cache misses: 75023
+Thread[1][24]: Elapsed: 213104 us | Condition WT: 0 us | Handlers mutex WT: 15 us | MPI mutex WT: 0 us | LB mutex WT: 365 us | Total L2 cache misses: 77206
+Thread[1][25]: Elapsed: 213094 us | Condition WT: 0 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 331 us | Total L2 cache misses: 74783
+Thread[1][26]: Elapsed: 218131 us | Condition WT: 0 us | Handlers mutex WT: 8 us | MPI mutex WT: 0 us | LB mutex WT: 444 us | Total L2 cache misses: 76869
+Thread[1][27]: Elapsed: 211455 us | Condition WT: 0 us | Handlers mutex WT: 10 us | MPI mutex WT: 0 us | LB mutex WT: 343 us | Total L2 cache misses: 73341
+Thread[1][28]: Elapsed: 212753 us | Condition WT: 0 us | Handlers mutex WT: 9 us | MPI mutex WT: 0 us | LB mutex WT: 353 us | Total L2 cache misses: 75349
+Thread[1][29]: Elapsed: 211573 us | Condition WT: 0 us | Handlers mutex WT: 13 us | MPI mutex WT: 0 us | LB mutex WT: 352 us | Total L2 cache misses: 74652
+Thread[1][30]: Elapsed: 211522 us | Condition WT: 0 us | Handlers mutex WT: 10 us | MPI mutex WT: 0 us | LB mutex WT: 348 us | Total L2 cache misses: 76527
+Thread[1][31]: Elapsed: 212689 us | Condition WT: 0 us | Handlers mutex WT: 8 us | MPI mutex WT: 0 us | LB mutex WT: 209 us | Total L2 cache misses: 65147
+Finished writing logfile ./conv.clog2.
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 3 -machinefile mf --map-by node ./conv 200 32 1
+Rank[1] | Elapsed time: 525626 us
+Thread[1][0]: Elapsed: 443672 us | Condition WT: 63 us | Handlers mutex WT: 6 us | MPI mutex WT: 19 us | LB mutex WT: 44 us | Total L2 cache misses: 210867
+Thread[1][1]: Elapsed: 443366 us | Condition WT: 295122 us | Handlers mutex WT: 74 us | MPI mutex WT: 0 us | LB mutex WT: 133 us | Total L2 cache misses: 78769
+Thread[1][2]: Elapsed: 443329 us | Condition WT: 227935 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 191 us | Total L2 cache misses: 84014
+Thread[1][3]: Elapsed: 443356 us | Condition WT: 199980 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 198 us | Total L2 cache misses: 83925
+Thread[1][4]: Elapsed: 443346 us | Condition WT: 191299 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 250 us | Total L2 cache misses: 91080
+Thread[1][5]: Elapsed: 442263 us | Condition WT: 182967 us | Handlers mutex WT: 35 us | MPI mutex WT: 0 us | LB mutex WT: 244 us | Total L2 cache misses: 92636
+Thread[1][6]: Elapsed: 443128 us | Condition WT: 176390 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 288 us | Total L2 cache misses: 96249
+Thread[1][7]: Elapsed: 443112 us | Condition WT: 158442 us | Handlers mutex WT: 44 us | MPI mutex WT: 0 us | LB mutex WT: 352 us | Total L2 cache misses: 112179
+Thread[1][8]: Elapsed: 443028 us | Condition WT: 129897 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 383 us | Total L2 cache misses: 98536
+Thread[1][9]: Elapsed: 443408 us | Condition WT: 125418 us | Handlers mutex WT: 65 us | MPI mutex WT: 0 us | LB mutex WT: 454 us | Total L2 cache misses: 107802
+Thread[1][10]: Elapsed: 443413 us | Condition WT: 108605 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 459 us | Total L2 cache misses: 110710
+Thread[1][11]: Elapsed: 442573 us | Condition WT: 86184 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 586 us | Total L2 cache misses: 117190
+Thread[1][12]: Elapsed: 442459 us | Condition WT: 62240 us | Handlers mutex WT: 61 us | MPI mutex WT: 0 us | LB mutex WT: 700 us | Total L2 cache misses: 119686
+Thread[1][13]: Elapsed: 442561 us | Condition WT: 49802 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 713 us | Total L2 cache misses: 126786
+Thread[1][14]: Elapsed: 442467 us | Condition WT: 30956 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 1033 us | Total L2 cache misses: 150418
+Thread[1][15]: Elapsed: 442369 us | Condition WT: 8155 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 733 us | Total L2 cache misses: 131382
+Thread[1][16]: Elapsed: 447121 us | Condition WT: 313698 us | Handlers mutex WT: 73 us | MPI mutex WT: 0 us | LB mutex WT: 405 us | Total L2 cache misses: 115244
+Thread[1][17]: Elapsed: 448191 us | Condition WT: 337747 us | Handlers mutex WT: 61 us | MPI mutex WT: 0 us | LB mutex WT: 244 us | Total L2 cache misses: 90643
+Thread[1][18]: Elapsed: 450515 us | Condition WT: 348197 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 113 us | Total L2 cache misses: 79766
+Thread[1][19]: Elapsed: 455092 us | Condition WT: 354918 us | Handlers mutex WT: 50 us | MPI mutex WT: 0 us | LB mutex WT: 104 us | Total L2 cache misses: 75999
+Thread[1][20]: Elapsed: 457912 us | Condition WT: 358777 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 125 us | Total L2 cache misses: 70456
+Thread[1][21]: Elapsed: 460124 us | Condition WT: 360301 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 84 us | Total L2 cache misses: 68462
+Thread[1][22]: Elapsed: 469159 us | Condition WT: 369348 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 71 us | Total L2 cache misses: 64698
+Thread[1][23]: Elapsed: 472639 us | Condition WT: 369267 us | Handlers mutex WT: 47 us | MPI mutex WT: 0 us | LB mutex WT: 51 us | Total L2 cache misses: 60852
+Thread[1][24]: Elapsed: 476441 us | Condition WT: 373469 us | Handlers mutex WT: 53 us | MPI mutex WT: 0 us | LB mutex WT: 23 us | Total L2 cache misses: 61546
+Thread[1][25]: Elapsed: 479366 us | Condition WT: 381049 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 4 us | Total L2 cache misses: 66188
+Thread[1][26]: Elapsed: 491686 us | Condition WT: 397179 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 22 us | Total L2 cache misses: 63456
+Thread[1][27]: Elapsed: 493077 us | Condition WT: 399866 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 11 us | Total L2 cache misses: 64257
+Thread[1][28]: Elapsed: 514390 us | Condition WT: 423468 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 21 us | Total L2 cache misses: 62941
+Thread[1][29]: Elapsed: 514977 us | Condition WT: 424346 us | Handlers mutex WT: 38 us | MPI mutex WT: 0 us | LB mutex WT: 2 us | Total L2 cache misses: 64228
+Thread[1][30]: Elapsed: 521056 us | Condition WT: 429582 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 1 us | Total L2 cache misses: 67780
+Thread[1][31]: Elapsed: 521636 us | Condition WT: 1451 us | Handlers mutex WT: 1 us | MPI mutex WT: 100 us | LB mutex WT: 0 us | Total L2 cache misses: 275852
+Rank[0] | Elapsed time: 529409 us
+Rank[0] | Elapsed time to read from disk: 2276 us
+Thread[0][0]: Elapsed: 355472 us | Condition WT: 0 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 381 us | Total L2 cache misses: 90170
+Thread[0][1]: Elapsed: 355464 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 495 us | Total L2 cache misses: 100246
+Thread[0][2]: Elapsed: 355163 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 582 us | Total L2 cache misses: 107568
+Thread[0][3]: Elapsed: 355182 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 1080 us | Total L2 cache misses: 116582
+Thread[0][4]: Elapsed: 355168 us | Condition WT: 0 us | Handlers mutex WT: 16 us | MPI mutex WT: 0 us | LB mutex WT: 654 us | Total L2 cache misses: 125007
+Thread[0][5]: Elapsed: 355154 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 636 us | Total L2 cache misses: 125257
+Thread[0][6]: Elapsed: 354562 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 696 us | Total L2 cache misses: 128118
+Thread[0][7]: Elapsed: 354429 us | Condition WT: 0 us | Handlers mutex WT: 24 us | MPI mutex WT: 0 us | LB mutex WT: 741 us | Total L2 cache misses: 136998
+Thread[0][8]: Elapsed: 354394 us | Condition WT: 0 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 737 us | Total L2 cache misses: 126837
+Thread[0][9]: Elapsed: 354364 us | Condition WT: 0 us | Handlers mutex WT: 42 us | MPI mutex WT: 0 us | LB mutex WT: 693 us | Total L2 cache misses: 127131
+Thread[0][10]: Elapsed: 354337 us | Condition WT: 0 us | Handlers mutex WT: 31 us | MPI mutex WT: 0 us | LB mutex WT: 734 us | Total L2 cache misses: 123591
+Thread[0][11]: Elapsed: 354311 us | Condition WT: 0 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 887 us | Total L2 cache misses: 131252
+Thread[0][12]: Elapsed: 354318 us | Condition WT: 0 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 885 us | Total L2 cache misses: 133675
+Thread[0][13]: Elapsed: 353779 us | Condition WT: 0 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 793 us | Total L2 cache misses: 131484
+Thread[0][14]: Elapsed: 353873 us | Condition WT: 0 us | Handlers mutex WT: 41 us | MPI mutex WT: 0 us | LB mutex WT: 846 us | Total L2 cache misses: 128569
+Thread[0][15]: Elapsed: 353709 us | Condition WT: 0 us | Handlers mutex WT: 16 us | MPI mutex WT: 0 us | LB mutex WT: 570 us | Total L2 cache misses: 101773
+Thread[0][16]: Elapsed: 371110 us | Condition WT: 254924 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 77 us | Total L2 cache misses: 75304
+Thread[0][17]: Elapsed: 371675 us | Condition WT: 261819 us | Handlers mutex WT: 58 us | MPI mutex WT: 0 us | LB mutex WT: 20 us | Total L2 cache misses: 66582
+Thread[0][18]: Elapsed: 381883 us | Condition WT: 274878 us | Handlers mutex WT: 37 us | MPI mutex WT: 0 us | LB mutex WT: 3 us | Total L2 cache misses: 64838
+Thread[0][19]: Elapsed: 382474 us | Condition WT: 280312 us | Handlers mutex WT: 55 us | MPI mutex WT: 0 us | LB mutex WT: 2 us | Total L2 cache misses: 61980
+Thread[0][20]: Elapsed: 391637 us | Condition WT: 292522 us | Handlers mutex WT: 45 us | MPI mutex WT: 0 us | LB mutex WT: 3 us | Total L2 cache misses: 59215
+Thread[0][21]: Elapsed: 394187 us | Condition WT: 297069 us | Handlers mutex WT: 54 us | MPI mutex WT: 0 us | LB mutex WT: 2 us | Total L2 cache misses: 56251
+Thread[0][22]: Elapsed: 390010 us | Condition WT: 295342 us | Handlers mutex WT: 40 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 56634
+Thread[0][23]: Elapsed: 392262 us | Condition WT: 297748 us | Handlers mutex WT: 56 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 52887
+Thread[0][24]: Elapsed: 391341 us | Condition WT: 297603 us | Handlers mutex WT: 48 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 52068
+Thread[0][25]: Elapsed: 398030 us | Condition WT: 304849 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 56280
+Thread[0][26]: Elapsed: 408845 us | Condition WT: 308878 us | Handlers mutex WT: 49 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 56939
+Thread[0][27]: Elapsed: 404380 us | Condition WT: 312325 us | Handlers mutex WT: 46 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 56772
+Thread[0][28]: Elapsed: 411978 us | Condition WT: 320583 us | Handlers mutex WT: 43 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 56014
+Thread[0][29]: Elapsed: 418404 us | Condition WT: 324690 us | Handlers mutex WT: 54 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 54515
+Thread[0][30]: Elapsed: 422303 us | Condition WT: 330230 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 0 us | Total L2 cache misses: 57958
+Thread[0][31]: Elapsed: 425537 us | Condition WT: 0 us | Handlers mutex WT: 1 us | MPI mutex WT: 59 us | LB mutex WT: 0 us | Total L2 cache misses: 198106
+Writing logfile....
+Enabling the Default clock synchronization...
+Rank[2] | Elapsed time: 529408 us
+Thread[2][0]: Elapsed: 523787 us | Condition WT: 175411 us | Handlers mutex WT: 33 us | MPI mutex WT: 1 us | LB mutex WT: 201 us | Total L2 cache misses: 298045
+Thread[2][1]: Elapsed: 524334 us | Condition WT: 203511 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 1682 us | Total L2 cache misses: 542074
+Thread[2][2]: Elapsed: 524080 us | Condition WT: 219261 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 142 us | Total L2 cache misses: 153614
+Thread[2][3]: Elapsed: 523481 us | Condition WT: 239449 us | Handlers mutex WT: 19 us | MPI mutex WT: 0 us | LB mutex WT: 115 us | Total L2 cache misses: 142151
+Thread[2][4]: Elapsed: 522906 us | Condition WT: 299152 us | Handlers mutex WT: 5439 us | MPI mutex WT: 0 us | LB mutex WT: 42 us | Total L2 cache misses: 102541
+Thread[2][5]: Elapsed: 522704 us | Condition WT: 264522 us | Handlers mutex WT: 2380 us | MPI mutex WT: 0 us | LB mutex WT: 89 us | Total L2 cache misses: 228990
+Thread[2][6]: Elapsed: 521461 us | Condition WT: 239427 us | Handlers mutex WT: 28 us | MPI mutex WT: 0 us | LB mutex WT: 47 us | Total L2 cache misses: 335467
+Thread[2][7]: Elapsed: 521689 us | Condition WT: 210913 us | Handlers mutex WT: 1630 us | MPI mutex WT: 0 us | LB mutex WT: 1725 us | Total L2 cache misses: 382038
+Thread[2][8]: Elapsed: 522217 us | Condition WT: 245467 us | Handlers mutex WT: 2407 us | MPI mutex WT: 0 us | LB mutex WT: 65 us | Total L2 cache misses: 493830
+Thread[2][9]: Elapsed: 521820 us | Condition WT: 207334 us | Handlers mutex WT: 1373 us | MPI mutex WT: 0 us | LB mutex WT: 5518 us | Total L2 cache misses: 420970
+Thread[2][10]: Elapsed: 521295 us | Condition WT: 224612 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 34 us | Total L2 cache misses: 511765
+Thread[2][11]: Elapsed: 520002 us | Condition WT: 307130 us | Handlers mutex WT: 7064 us | MPI mutex WT: 0 us | LB mutex WT: 37 us | Total L2 cache misses: 339121
+Thread[2][12]: Elapsed: 519829 us | Condition WT: 303715 us | Handlers mutex WT: 16 us | MPI mutex WT: 0 us | LB mutex WT: 50 us | Total L2 cache misses: 390929
+Thread[2][13]: Elapsed: 519546 us | Condition WT: 227350 us | Handlers mutex WT: 1225 us | MPI mutex WT: 0 us | LB mutex WT: 148 us | Total L2 cache misses: 271681
+Thread[2][14]: Elapsed: 521024 us | Condition WT: 219941 us | Handlers mutex WT: 23 us | MPI mutex WT: 0 us | LB mutex WT: 172 us | Total L2 cache misses: 415003
+Thread[2][15]: Elapsed: 519353 us | Condition WT: 220561 us | Handlers mutex WT: 52 us | MPI mutex WT: 0 us | LB mutex WT: 399 us | Total L2 cache misses: 246607
+Thread[2][16]: Elapsed: 519860 us | Condition WT: 190674 us | Handlers mutex WT: 50 us | MPI mutex WT: 0 us | LB mutex WT: 485 us | Total L2 cache misses: 276124
+Thread[2][17]: Elapsed: 519734 us | Condition WT: 172770 us | Handlers mutex WT: 33 us | MPI mutex WT: 0 us | LB mutex WT: 231 us | Total L2 cache misses: 313744
+Thread[2][18]: Elapsed: 518370 us | Condition WT: 228658 us | Handlers mutex WT: 32 us | MPI mutex WT: 0 us | LB mutex WT: 191 us | Total L2 cache misses: 170068
+Thread[2][19]: Elapsed: 517856 us | Condition WT: 220520 us | Handlers mutex WT: 25 us | MPI mutex WT: 0 us | LB mutex WT: 92 us | Total L2 cache misses: 276339
+Thread[2][20]: Elapsed: 520610 us | Condition WT: 214990 us | Handlers mutex WT: 22 us | MPI mutex WT: 0 us | LB mutex WT: 81 us | Total L2 cache misses: 391768
+Thread[2][21]: Elapsed: 523615 us | Condition WT: 237060 us | Handlers mutex WT: 405 us | MPI mutex WT: 0 us | LB mutex WT: 60 us | Total L2 cache misses: 346836
+Thread[2][22]: Elapsed: 524179 us | Condition WT: 219857 us | Handlers mutex WT: 2569 us | MPI mutex WT: 0 us | LB mutex WT: 98 us | Total L2 cache misses: 382647
+Thread[2][23]: Elapsed: 524160 us | Condition WT: 279460 us | Handlers mutex WT: 1298 us | MPI mutex WT: 0 us | LB mutex WT: 59 us | Total L2 cache misses: 210621
+Thread[2][24]: Elapsed: 524719 us | Condition WT: 209236 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 61 us | Total L2 cache misses: 220212
+Thread[2][25]: Elapsed: 524490 us | Condition WT: 222959 us | Handlers mutex WT: 39 us | MPI mutex WT: 0 us | LB mutex WT: 124 us | Total L2 cache misses: 575437
+Thread[2][26]: Elapsed: 524189 us | Condition WT: 255025 us | Handlers mutex WT: 21 us | MPI mutex WT: 0 us | LB mutex WT: 100 us | Total L2 cache misses: 98820
+Thread[2][27]: Elapsed: 524418 us | Condition WT: 237463 us | Handlers mutex WT: 26 us | MPI mutex WT: 0 us | LB mutex WT: 85 us | Total L2 cache misses: 850556
+Thread[2][28]: Elapsed: 524654 us | Condition WT: 183614 us | Handlers mutex WT: 1905 us | MPI mutex WT: 0 us | LB mutex WT: 62 us | Total L2 cache misses: 281616
+Thread[2][29]: Elapsed: 524968 us | Condition WT: 226292 us | Handlers mutex WT: 17 us | MPI mutex WT: 0 us | LB mutex WT: 96 us | Total L2 cache misses: 444432
+Thread[2][30]: Elapsed: 525578 us | Condition WT: 175554 us | Handlers mutex WT: 10164 us | MPI mutex WT: 0 us | LB mutex WT: 64 us | Total L2 cache misses: 251682
+Thread[2][31]: Elapsed: 525068 us | Condition WT: 205482 us | Handlers mutex WT: 18 us | MPI mutex WT: 0 us | LB mutex WT: 83 us | Total L2 cache misses: 166360
+Finished writing logfile ./conv.clog2.

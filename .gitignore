@@ -48,8 +48,7 @@ seq
 *.idb
 *.pdb
 *test.c
-**/io-files/result*
-**/docs/presentation/performance/*
+**/io-files/*.txt
 
 
 # Kernel Module Compile Results

@@ -1,0 +1,27 @@
+*********************************************
+PERFORMANCE: 
+- memoria distribuita		
+- mutua esclusione di mpi non ottimizzata		
+- ritardi non necessari		
+- carico non bilanciato
+
+COMMIT: 57bc1a5
+*********************************************
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 2 -machinefile mf --map-by node ./conv 200 16
+Rank[0] | Elapsed time: 286904 us
+Rank[0] | Total L2 cache misses:114617
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 3 -machinefile mf --map-by node ./conv 200 16
+Rank[0] | Elapsed time: 204264 us
+Rank[0] | Total L2 cache misses:46313
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 3 -machinefile mf --map-by node ./conv 200 16
+Rank[0] | Elapsed time: 202364 us
+Rank[0] | Total L2 cache misses:49718
+
+
+[ocone@compute-0-0 convolution]$ mpirun --mca btl self,openib -np 4 -machinefile mf --map-by node ./conv 200 16
+Rank[0] | Elapsed time: 188578 us
+Rank[0] | Total L2 cache misses:42354

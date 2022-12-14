@@ -18,7 +18,7 @@
 #define GRID_FILE_PATH "./io-files/grids/haring.bin"
 #define KERNEL_FILE_PATH "./io-files/kernels/gblur.bin"
 #define VEC_SIZE 4
-#define DEBUG 1                                       // True to save result in textual and binary mode
+#define DEBUG 0                                       // True to save result in textual and binary mode
 #define WORKER_FACTOR 1                               // Used to calc how many rows must be computed before polling the neighbours
 #define MEAN_VALUE 0                                  // Temporary solution (due to normalization)
 #define REQS_OFFSET(POS) ((POS) * SIM_REQS / 2)       // Used to calc index offset in MPI requests array
@@ -320,13 +320,8 @@ int main(int argc, char** argv) {
   time_stop = PAPI_get_real_usec();
   if(!rank) printf("Elapsed time: %lld us\n", (time_stop - time_start));
 
-  // Store computed matrix for debug purposes. Rank 0 has the whole matrix file in memory, other ranks have only the part they are interested in 
-  if (DEBUG && !rank) {
-    save_bin(res_grid);
-    save_txt(res_grid);
-  }
-
   // Destroy pthread objects and free all used resources
+  MPI_Finalize();
   pthread_mutex_destroy(&mutex_mpi);
   pthread_mutex_destroy(&lb.mutex);
   pthread_mutex_destroy(&io_args.mutex);
@@ -337,8 +332,12 @@ int main(int argc, char** argv) {
     pthread_cond_destroy(&handlers[i].pad_ready);
   }
 
-  MPI_Finalize();
   if(!rank) {
+    if(DEBUG) {
+      // Store computed matrix for debug purposes. Rank 0 has the whole matrix file in memory, other ranks have only the part they are interested in 
+      save_bin(res_grid);
+      save_txt(res_grid);
+    }
     fclose(fp_kernel);
     fclose(fp_grid);
   }
